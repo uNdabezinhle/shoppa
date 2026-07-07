@@ -8,31 +8,32 @@ Monorepo for Shoppa: a mobile-first shopping intelligence platform (South Africa
 - `app/` — Flutter application (`shoppa_app`) targeting iOS, Android, and Web.
 - `docker-compose.yml` — local Postgres + Redis + API + Celery stack.
 
-## Status (Sprint 0 — Platform, July 2026)
+## Status (Milestone 1 — Foundation, July 2026)
 
-**Released:** `v0.0.1-m0` on `main` (Sprint 0 complete)
+**Released:** `v0.0.1-m1` on `main` (Milestone 1 complete)
 
-**Active branch:** `milestone/m1-foundation`
+**Active branch:** `milestone/m2-collaboration`
 
-| Area | Done in Sprint 0 |
-|------|------------------|
-| **Git** | Milestone branching model; bootstrap tag `v0.0.0` |
-| **Backend core** | Auth, lists, collaboration, price intelligence, promotions (pre-existing) |
-| **Scaffolded apps** | `regions`, `delivery`, `chat`, `notifications`, `subscriptions`, `admin_tools`, `ads` |
-| **Celery** | Worker + Beat config; eager mode without Redis |
-| **Seed data** | `python manage.py seed_launch_data` (ZA region, 4 stores, 8 products) |
-| **Stripe** | Webhook stub at `POST /v1/webhooks/stripe` |
-| **Mobile** | Persistent auth (`flutter_secure_storage`), token refresh, `go_router` |
-| **CI** | Backend + app workflows on `main` and `milestone/**`; staging deploy template |
+| Area | Done in M1 |
+|------|------------|
+| **Backend auth** | `PATCH /users/me`, password-reset stub (`POST /auth/password-reset`), Personal→Professional upgrade (`POST /users/me/upgrade`) |
+| **Rate limits** | Auth endpoints 10/min/IP; authenticated reads 120/min/user |
+| **Mobile shell** | Bottom nav: Mall · Compare · Lists · Profile (`ShellRoute` + `go_router`) |
+| **List CRUD UI** | Create/edit/delete lists; add/edit items (qty/unit/note); swipe-delete; drag-reorder |
+| **Profile** | Account type, region, upgrade to Professional, logout |
+| **Offline queue** | Expanded mutations: `update_item`, `delete_item`, `reorder_items` |
+| **Mall tab** | Savings hero card driven by price comparison on latest list |
 
-**Next (M1):** tab shell, list CRUD UI, rate limits, expanded offline queue, profile screen.
+**Prior (Sprint 0 — `v0.0.1-m0`):** persistent auth, `go_router`, Celery scaffold, seed data, regions API, docker-compose, CI.
+
+**Next (M2):** real-time collaboration polish, WebSocket UX, activity feed enhancements.
 
 ## Git branching
 
 | Branch | Purpose |
 |--------|---------|
 | `main` | Phase-gate releases only |
-| `milestone/m1-foundation` | Phase 1 completion (current) |
+| `milestone/m2-collaboration` | Phase 2 collaboration (current) |
 | `feat(scope): …` | Feature branches off the active milestone branch |
 
 ## Getting started

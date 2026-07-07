@@ -126,3 +126,34 @@ class LoginAndProfileTests(APITestCase):
     def test_unauthenticated_request_to_me_is_rejected(self):
         response = self.client.get(self.me_url)
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_patch_me_updates_locale(self):
+        login = self.client.post(
+            self.login_url,
+            {"email": "shopper@example.com", "password": self.password},
+            format="json",
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        response = self.client.patch(
+            self.me_url, {"locale": "en-GB"}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["locale"], "en-GB")
+
+    def test_password_reset_stub_always_accepts(self):
+        url = reverse("auth-password-reset")
+        response = self.client.post(
+            url, {"email": "nobody@example.com"}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+
+    def test_personal_user_can_upgrade_to_professional(self):
+        login = self.client.post(
+            self.login_url,
+            {"email": "shopper@example.com", "password": self.password},
+            format="json",
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        response = self.client.post(reverse("users-me-upgrade"), format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["account_type"], AccountType.PROFESSIONAL)

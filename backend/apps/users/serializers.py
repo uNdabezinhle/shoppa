@@ -16,6 +16,17 @@ class UserSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class UserUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ["locale"]
+        extra_kwargs = {"locale": {"required": False}}
+
+
+class PasswordResetRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+
 class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, validators=[validate_password])
     account_type = serializers.ChoiceField(

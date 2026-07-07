@@ -77,6 +77,22 @@ class AuthRepository {
     }
   }
 
+  Future<ShoppaUser> updateMe({String? locale}) async {
+    final body = <String, dynamic>{};
+    if (locale != null) body['locale'] = locale;
+    final json = await _client.patch('/users/me', body);
+    return ShoppaUser.fromJson(json);
+  }
+
+  Future<ShoppaUser> upgradeToProfessional() async {
+    final json = await _client.post('/users/me/upgrade', {}, authenticated: true);
+    return ShoppaUser.fromJson(json);
+  }
+
+  Future<void> requestPasswordReset(String email) async {
+    await _client.post('/auth/password-reset', {'email': email}, authenticated: false);
+  }
+
   Future<void> logout() async {
     await _client.tokenStore.clear();
   }

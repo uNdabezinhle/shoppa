@@ -7,6 +7,7 @@ import '../core/list_realtime_client.dart';
 import '../core/lists_repository.dart';
 import '../core/session_summary.dart';
 import '../theme/shoppa_theme.dart';
+import '../widgets/item_form_dialog.dart';
 
 /// Item check-off view (SRS FR-2.2, FR-4.1) with a price-capture prompt
 /// on check-off (FR-4.3) and a session summary on completion (FR-4.4),
@@ -160,38 +161,204 @@ class _ListScreenState extends State<ListScreen> {
   }
 
   Future<void> _addItem() async {
-    final controller = TextEditingController();
-    final name = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Add item'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(hintText: 'e.g. Full cream milk 2L'),
-          onSubmitted: (value) => Navigator.of(context).pop(value),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(controller.text),
-            child: const Text('Add'),
-          ),
-        ],
-      ),
-    );
-    if (name == null || name.trim().isEmpty) return;
+    final values = await showItemFormDialog(context);
+    if (values == null) return;
     try {
-      await widget.listsRepository.addItem(widget.listId, name: name.trim());
+      await widget.listsRepository.addItem(
+        widget.listId,
+        name: values['name'] as String,
+        quantity: values['quantity'] as num,
+        unit: values['unit'] as String,
+        note: values['note'] as String,
+      );
       _reload();
     } on ApiException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(e.message)));
     }
+  }
+
+  Future<void> _editItem(ShoppaListItem item) async {
+    final values = await showItemFormDialog(
+      context,
+      title: 'Edit item',
+      initialName: item.name,
+      initialQuantity: item.quantity,
+      initialUnit: item.unit,
+      initialNote: item.note,
+    );
+    if (values == null) return;
+    try {
+      await widget.listsRepository.updateItem(
+        widget.listId,
+        item.id,
+        name: values['name'] as String,
+        quantity: values['quantity'] as num,
+        unit: values['unit'] as String,
+        note: values['note'] as String,
+      );
+      _reload();
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.message)));
+    }
+  }
+
+  Future<bool> _confirmDeleteItem(ShoppaListItem item) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove item?'),
+        content: Text('Remove "${item.name}" from this list?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    return ok == true;
+  }
+
+  Future<void> _onReorder(List<ShoppaListItem> items, int oldIndex, int newIndex) async {
+    if (newIndex > oldIndex) newIndex -= 1;
+    final reordered = List<ShoppaListItem>.from(items);
+    final moved = reordered.removeAt(oldIndex);
+    reordered.insert(newIndex, moved);
+    await widget.listsRepository.reorderItems(
+      widget.listId,
+      reordered.map((e) => e.id).toList(),
+    );
+    _reload();
+  }
+
+  Widget _buildItemTile({
+    required ShoppaListItem item,
+    required ShoppaList list,
+    required int index,
+    bool reorderable = false,
+    VoidCallback? onDismissed,
+  }) {
+    final tile = Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Material(
+        color: item.checked
+            ? ShoppaColors.panel2.withOpacity(0.5)
+            : ShoppaColors.panel,
+        borderRadius: BorderRadius.circular(14),
+        child: InkWell(
+          onTap: () => _toggle(item, list.canEdit),
+          borderRadius: BorderRadius.circular(14),
+          child: Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: ShoppaColors.line),
+            ),
+            child: Row(
+              children: [
+                if (reorderable) ...[
+                  ReorderableDragStartListener(
+                    index: index,
+                    child: const Icon(Icons.drag_handle, color: ShoppaColors.faint),
+                  ),
+                  const SizedBox(width: 4),
+                ],
+                Icon(
+                  item.checked
+                      ? Icons.check_circle
+                      : Icons.radio_button_unchecked,
+                  color: item.checked ? ShoppaColors.green : ShoppaColors.faint,
+                ),
+                const SizedBox(width: 12),
+                Expanded(child: _itemDetails(item)),
+                if (list.canEdit)
+                  IconButton(
+                    icon: const Icon(Icons.edit_outlined, size: 20),
+                    color: ShoppaColors.mist,
+                    onPressed: () => _editItem(item),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    if (!list.canEdit || onDismissed == null) {
+      return KeyedSubtree(key: ValueKey(item.id), child: tile);
+    }
+
+    return Dismissible(
+      key: ValueKey(item.id),
+      direction: DismissDirection.endToStart,
+      background: Container(
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.only(right: 20),
+        margin: const EdgeInsets.only(bottom: 10),
+        decoration: BoxDecoration(
+          color: ShoppaColors.rose,
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: const Icon(Icons.delete, color: Colors.white),
+      ),
+      confirmDismiss: (_) => _confirmDeleteItem(item),
+      onDismissed: (_) => onDismissed(),
+      child: tile,
+    );
+  }
+
+  Widget _itemDetails(ShoppaListItem item) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Flexible(
+              child: Text(
+                item.name,
+                style: TextStyle(
+                  color: ShoppaColors.ink,
+                  fontWeight: FontWeight.w600,
+                  decoration:
+                      item.checked ? TextDecoration.lineThrough : null,
+                ),
+              ),
+            ),
+            if (item.hasPromotion) ...[
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: ShoppaColors.amber.withOpacity(0.18),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: const Text(
+                  'PROMO',
+                  style: TextStyle(
+                    color: ShoppaColors.amber,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+        Text(
+          'Qty ${item.quantity} ${item.unit}'
+          '${item.note.isNotEmpty ? ' · ${item.note}' : ''}',
+          style: const TextStyle(color: ShoppaColors.mist, fontSize: 12),
+        ),
+      ],
+    );
   }
 
   Future<void> _openShareSheet(ShoppaList list) async {
@@ -405,104 +572,40 @@ class _ListScreenState extends State<ListScreen> {
                           style: TextStyle(color: ShoppaColors.mist),
                         ),
                       )
-                    : ListView.separated(
-                        padding: const EdgeInsets.all(16),
-                        itemCount: items.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 10),
-                        itemBuilder: (context, index) {
-                          final item = items[index];
-                          return InkWell(
-                            onTap: () => _toggle(item, list.canEdit),
-                            borderRadius: BorderRadius.circular(14),
-                            child: Container(
-                              padding: const EdgeInsets.all(14),
-                              decoration: BoxDecoration(
-                                color: item.checked
-                                    ? ShoppaColors.panel2.withOpacity(0.5)
-                                    : ShoppaColors.panel,
-                                borderRadius: BorderRadius.circular(14),
-                                border: Border.all(color: ShoppaColors.line),
-                              ),
-                              child: Row(
-                                children: [
-                                  Icon(
-                                    item.checked
-                                        ? Icons.check_circle
-                                        : Icons.radio_button_unchecked,
-                                    color: item.checked
-                                        ? ShoppaColors.green
-                                        : ShoppaColors.faint,
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Row(
-                                          children: [
-                                            Flexible(
-                                              child: Text(
-                                                item.name,
-                                                style: TextStyle(
-                                                  color: ShoppaColors.ink,
-                                                  fontWeight: FontWeight.w600,
-                                                  decoration: item.checked
-                                                      ? TextDecoration
-                                                          .lineThrough
-                                                      : null,
-                                                ),
-                                              ),
-                                            ),
-                                            // SRS FR-7.2: a subtle, non-
-                                            // blocking tag -- never a
-                                            // popup or interstitial --
-                                            // for items with a live
-                                            // promotion.
-                                            if (item.hasPromotion) ...[
-                                              const SizedBox(width: 6),
-                                              Container(
-                                                padding:
-                                                    const EdgeInsets.symmetric(
-                                                  horizontal: 6,
-                                                  vertical: 2,
-                                                ),
-                                                decoration: BoxDecoration(
-                                                  color: ShoppaColors.amber
-                                                      .withOpacity(0.18),
-                                                  borderRadius:
-                                                      BorderRadius.circular(6),
-                                                ),
-                                                child: const Text(
-                                                  'PROMO',
-                                                  style: TextStyle(
-                                                    color: ShoppaColors.amber,
-                                                    fontSize: 10,
-                                                    fontWeight:
-                                                        FontWeight.w700,
-                                                  ),
-                                                ),
-                                              ),
-                                            ],
-                                          ],
-                                        ),
-                                        Text(
-                                          'Qty ${item.quantity} ${item.unit}'
-                                          '${item.note.isNotEmpty ? ' · ${item.note}' : ''}',
-                                          style: const TextStyle(
-                                            color: ShoppaColors.mist,
-                                            fontSize: 12,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          );
-                        },
-                      ),
+                    : list.canEdit
+                        ? ReorderableListView.builder(
+                            padding: const EdgeInsets.all(16),
+                            buildDefaultDragHandles: false,
+                            itemCount: items.length,
+                            onReorder: (oldIndex, newIndex) =>
+                                _onReorder(items, oldIndex, newIndex),
+                            itemBuilder: (context, index) {
+                              final item = items[index];
+                              return _buildItemTile(
+                                item: item,
+                                list: list,
+                                index: index,
+                                reorderable: true,
+                                onDismissed: () => widget.listsRepository
+                                    .deleteItem(widget.listId, item.id)
+                                    .then((_) => _reload()),
+                              );
+                            },
+                          )
+                        : ListView.separated(
+                            padding: const EdgeInsets.all(16),
+                            itemCount: items.length,
+                            separatorBuilder: (_, __) =>
+                                const SizedBox(height: 10),
+                            itemBuilder: (context, index) {
+                              final item = items[index];
+                              return _buildItemTile(
+                                item: item,
+                                list: list,
+                                index: index,
+                              );
+                            },
+                          ),
               ),
             ],
           );

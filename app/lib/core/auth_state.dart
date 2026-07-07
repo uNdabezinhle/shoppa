@@ -26,6 +26,11 @@ class AuthState extends ChangeNotifier {
     notifyListeners();
   }
 
+  void updateUser(ShoppaUser value) {
+    user = value;
+    notifyListeners();
+  }
+
   Future<void> logout() async {
     await _authRepository.logout();
     user = null;
@@ -50,10 +55,8 @@ String? resolveAuthRedirect({
     return '/login';
   }
 
-  if (isAuthenticated &&
-      (matchedLocation == '/' ||
-          matchedLocation == '/login' ||
-          matchedLocation == '/register')) {
+  const authLanding = {'/', '/login', '/register'};
+  if (isAuthenticated && authLanding.contains(matchedLocation)) {
     return '/home';
   }
 

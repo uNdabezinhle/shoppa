@@ -34,7 +34,7 @@ class QueuedMutation {
   final String listId;
   /// Null for "add_item" (the item doesn't exist server-side yet).
   final String? itemId;
-  /// "add_item" | "check_item".
+  /// "add_item" | "check_item" | "update_item" | "delete_item" | "reorder_items".
   final String type;
   final Map<String, dynamic> payload;
   /// ISO-8601 timestamp of when the user actually made this change,

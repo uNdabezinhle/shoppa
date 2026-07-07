@@ -545,6 +545,153 @@ void main() {
       expect(sentBody.containsKey('store_id'), false);
     });
 
+    test('updateList PATCHes title and category', () async {
+      late Map<String, dynamic> sentBody;
+      final mockClient = MockClient((request) async {
+        expect(request.method, 'PATCH');
+        expect(request.url.path, '/v1/lists/l-1');
+        sentBody = jsonDecode(request.body) as Map<String, dynamic>;
+        return http.Response(
+          jsonEncode({
+            'id': 'l-1',
+            'title': 'Weekly Shop',
+            'category': 'groceries',
+            'is_recurring': true,
+            'item_count': 0,
+          }),
+          200,
+        );
+      });
+      final repo = ListsRepository(
+        ApiClient(
+          baseUrl: 'http://localhost:8000/v1',
+          tokenStore: tokenStore,
+          httpClient: mockClient,
+        ),
+      );
+
+      final list = await repo.updateList(
+        'l-1',
+        title: 'Weekly Shop',
+        category: 'groceries',
+        isRecurring: true,
+      );
+
+      expect(sentBody['title'], 'Weekly Shop');
+      expect(sentBody['category'], 'groceries');
+      expect(sentBody['is_recurring'], true);
+      expect(list.title, 'Weekly Shop');
+    });
+
+    test('deleteList DELETEs the list', () async {
+      final mockClient = MockClient((request) async {
+        expect(request.method, 'DELETE');
+        expect(request.url.path, '/v1/lists/l-1');
+        return http.Response('', 204);
+      });
+      final repo = ListsRepository(
+        ApiClient(
+          baseUrl: 'http://localhost:8000/v1',
+          tokenStore: tokenStore,
+          httpClient: mockClient,
+        ),
+      );
+
+      await repo.deleteList('l-1');
+    });
+
+    test('updateItem PATCHes name, quantity, unit, and note', () async {
+      late Map<String, dynamic> sentBody;
+      final mockClient = MockClient((request) async {
+        expect(request.method, 'PATCH');
+        expect(request.url.path, '/v1/lists/l-1/items/i-1');
+        sentBody = jsonDecode(request.body) as Map<String, dynamic>;
+        return http.Response(
+          jsonEncode({
+            'id': 'i-1',
+            'name': 'Low-fat milk 1L',
+            'quantity': '2.00',
+            'unit': 'ea',
+            'note': 'organic',
+            'checked': false,
+          }),
+          200,
+        );
+      });
+      final repo = ListsRepository(
+        ApiClient(
+          baseUrl: 'http://localhost:8000/v1',
+          tokenStore: tokenStore,
+          httpClient: mockClient,
+        ),
+      );
+
+      final item = await repo.updateItem(
+        'l-1',
+        'i-1',
+        name: 'Low-fat milk 1L',
+        quantity: 2,
+        unit: 'ea',
+        note: 'organic',
+      );
+
+      expect(sentBody['name'], 'Low-fat milk 1L');
+      expect(sentBody['quantity'], 2);
+      expect(sentBody['unit'], 'ea');
+      expect(sentBody['note'], 'organic');
+      expect(item.name, 'Low-fat milk 1L');
+    });
+
+    test('deleteItem DELETEs the item', () async {
+      final mockClient = MockClient((request) async {
+        expect(request.method, 'DELETE');
+        expect(request.url.path, '/v1/lists/l-1/items/i-1');
+        return http.Response('', 204);
+      });
+      final repo = ListsRepository(
+        ApiClient(
+          baseUrl: 'http://localhost:8000/v1',
+          tokenStore: tokenStore,
+          httpClient: mockClient,
+        ),
+      );
+
+      await repo.deleteItem('l-1', 'i-1');
+    });
+
+    test('reorderItems PATCHes each item position', () async {
+      final paths = <String>[];
+      final mockClient = MockClient((request) async {
+        paths.add(request.url.path);
+        return http.Response(
+          jsonEncode({
+            'id': 'i-1',
+            'name': 'Item',
+            'quantity': '1.00',
+            'unit': 'ea',
+            'note': '',
+            'checked': false,
+          }),
+          200,
+        );
+      });
+      final repo = ListsRepository(
+        ApiClient(
+          baseUrl: 'http://localhost:8000/v1',
+          tokenStore: tokenStore,
+          httpClient: mockClient,
+        ),
+      );
+
+      await repo.reorderItems('l-1', ['i-2', 'i-1', 'i-3']);
+
+      expect(paths, [
+        '/v1/lists/l-1/items/i-2',
+        '/v1/lists/l-1/items/i-1',
+        '/v1/lists/l-1/items/i-3',
+      ]);
+    });
+
     test('optOutOfPromotions asserts exactly one target', () async {
       final mockClient = MockClient((request) async {
         return http.Response('{}', 201);

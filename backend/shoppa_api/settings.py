@@ -132,6 +132,13 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.CursorPagination",
     "PAGE_SIZE": 20,
     "EXCEPTION_HANDLER": "shoppa_api.exceptions.shoppa_exception_handler",
+    "DEFAULT_THROTTLE_CLASSES": (
+        "shoppa_api.throttling.ReadRateThrottle",
+    ),
+    "DEFAULT_THROTTLE_RATES": {
+        "auth": "10/minute",
+        "reads": "120/minute",
+    },
 }
 
 SIMPLE_JWT = {

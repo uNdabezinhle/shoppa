@@ -2,7 +2,9 @@
 object in the same response, per API Specification §4.
 """
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+
+from shoppa_api.throttling import AuthRateThrottle
 
 from .serializers import UserSerializer
 
@@ -16,3 +18,8 @@ class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
 
 class LoginView(TokenObtainPairView):
     serializer_class = EmailTokenObtainPairSerializer
+    throttle_classes = [AuthRateThrottle]
+
+
+class ThrottledTokenRefreshView(TokenRefreshView):
+    throttle_classes = [AuthRateThrottle]

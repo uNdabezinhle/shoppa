@@ -3,9 +3,13 @@ import 'package:go_router/go_router.dart';
 
 import 'app_deps.dart';
 import 'auth_state.dart';
-import '../screens/home_screen.dart';
+import '../screens/app_shell.dart';
+import '../screens/compare_tab_screen.dart';
 import '../screens/list_screen.dart';
 import '../screens/login_screen.dart';
+import '../screens/mall_tab_screen.dart';
+import '../screens/my_lists_tab_screen.dart';
+import '../screens/profile_screen.dart';
 import '../screens/promotions_screen.dart';
 import '../screens/register_screen.dart';
 
@@ -39,18 +43,38 @@ GoRouter createAppRouter(AppDeps deps) {
           authState: deps.authState,
         ),
       ),
-      GoRoute(
-        path: '/home',
-        builder: (context, state) {
-          final user = deps.authState.user!;
-          return HomeScreen(
-            authRepository: deps.authRepository,
-            listsRepository: deps.listsRepository,
-            realtimeClient: deps.realtimeClient,
-            authState: deps.authState,
-            user: user,
-          );
-        },
+      ShellRoute(
+        builder: (context, state, child) => AppShell(child: child),
+        routes: [
+          GoRoute(
+            path: '/home',
+            builder: (context, state) => MallTabScreen(
+              authRepository: deps.authRepository,
+              listsRepository: deps.listsRepository,
+              user: deps.authState.user!,
+            ),
+          ),
+          GoRoute(
+            path: '/compare',
+            builder: (context, state) => CompareTabScreen(
+              listsRepository: deps.listsRepository,
+            ),
+          ),
+          GoRoute(
+            path: '/my-lists',
+            builder: (context, state) => MyListsTabScreen(
+              listsRepository: deps.listsRepository,
+            ),
+          ),
+          GoRoute(
+            path: '/profile',
+            builder: (context, state) => ProfileScreen(
+              authRepository: deps.authRepository,
+              authState: deps.authState,
+              user: deps.authState.user!,
+            ),
+          ),
+        ],
       ),
       GoRoute(
         path: '/promotions',

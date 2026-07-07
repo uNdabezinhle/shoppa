@@ -216,5 +216,56 @@ void main() {
       await repo.logout();
       expect(await tokenStore.hasSession, isFalse);
     });
+
+    test('upgradeToProfessional posts to /users/me/upgrade', () async {
+      await tokenStore.save(access: 'access-token', refresh: 'refresh-token');
+      late String path;
+      final mockClient = MockClient((request) async {
+        path = request.url.path;
+        return http.Response(
+          jsonEncode({
+            'id': 'a5f1c2e0-0000-0000-0000-000000000001',
+            'email': 'shopper@example.com',
+            'account_type': 'professional',
+            'region': 'ZA',
+          }),
+          200,
+        );
+      });
+      final repo = AuthRepository(
+        ApiClient(
+          baseUrl: 'http://localhost:8000/v1',
+          tokenStore: tokenStore,
+          httpClient: mockClient,
+        ),
+      );
+
+      final user = await repo.upgradeToProfessional();
+
+      expect(path, '/v1/users/me/upgrade');
+      expect(user.accountType, 'professional');
+    });
+
+    test('requestPasswordReset posts email to /auth/password-reset', () async {
+      late Map<String, dynamic> body;
+      final mockClient = MockClient((request) async {
+        body = jsonDecode(request.body) as Map<String, dynamic>;
+        return http.Response(
+          jsonEncode({'detail': 'If that email exists, a reset link has been sent.'}),
+          202,
+        );
+      });
+      final repo = AuthRepository(
+        ApiClient(
+          baseUrl: 'http://localhost:8000/v1',
+          tokenStore: tokenStore,
+          httpClient: mockClient,
+        ),
+      );
+
+      await repo.requestPasswordReset('shopper@example.com');
+
+      expect(body['email'], 'shopper@example.com');
+    });
   });
 }

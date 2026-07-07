@@ -326,8 +326,83 @@ class ListsRepository {
     return ShoppaComparison.fromJson(json);
   }
 
-  Future<void> deleteItem(String listId, String itemId) {
-    return _client.delete('/lists/$listId/items/$itemId');
+  Future<ShoppaList> updateList(
+    String listId, {
+    String? title,
+    String? category,
+    bool? isRecurring,
+  }) async {
+    final body = <String, dynamic>{};
+    if (title != null) body['title'] = title;
+    if (category != null) body['category'] = category;
+    if (isRecurring != null) body['is_recurring'] = isRecurring;
+    final json =
+        await _client.patch('/lists/$listId', body) as Map<String, dynamic>;
+    return ShoppaList.fromJson(json);
+  }
+
+  Future<void> deleteList(String listId) {
+    return _client.delete('/lists/$listId');
+  }
+
+  Future<ShoppaListItem> updateItem(
+    String listId,
+    String itemId, {
+    String? name,
+    num? quantity,
+    String? unit,
+    String? note,
+    int? position,
+    DateTime? clientUpdatedAt,
+  }) async {
+    final now = clientUpdatedAt ?? DateTime.now().toUtc();
+    final body = <String, dynamic>{};
+    if (name != null) body['name'] = name;
+    if (quantity != null) body['quantity'] = quantity;
+    if (unit != null) body['unit'] = unit;
+    if (note != null) body['note'] = note;
+    if (position != null) body['position'] = position;
+    if (clientUpdatedAt != null) {
+      body['client_updated_at'] = now.toIso8601String();
+    }
+    try {
+      final json = await _client.patch('/lists/$listId/items/$itemId', body)
+          as Map<String, dynamic>;
+      await _replaceItemInCache(listId, itemId, json);
+      return ShoppaListItem.fromJson(json);
+    } on NetworkUnavailableException {
+      return _queueUpdateItem(listId, itemId, body, now);
+    }
+  }
+
+  Future<void> deleteItem(String listId, String itemId) async {
+    try {
+      await _client.delete('/lists/$listId/items/$itemId');
+      await _removeItemFromCache(listId, itemId);
+    } on NetworkUnavailableException {
+      await _queueDeleteItem(listId, itemId);
+    }
+  }
+
+  /// Reorders items by PATCHing each item's position (FR-2.2).
+  Future<void> reorderItems(String listId, List<String> orderedItemIds) async {
+    final now = DateTime.now().toUtc();
+    try {
+      for (var i = 0; i < orderedItemIds.length; i++) {
+        await _client.patch('/lists/$listId/items/${orderedItemIds[i]}', {
+          'position': i,
+        });
+      }
+    } on NetworkUnavailableException {
+      await _offlineStore.enqueue(QueuedMutation(
+        id: _generateLocalId(),
+        listId: listId,
+        type: 'reorder_items',
+        payload: {'positions': orderedItemIds},
+        clientUpdatedAt: now.toIso8601String(),
+      ));
+      await _reorderCache(listId, orderedItemIds);
+    }
   }
 
   /// Replays this list's queued offline mutations against the real API,
@@ -353,6 +428,20 @@ class ListsRepository {
             '/lists/$listId/items/${mutation.itemId}',
             mutation.payload,
           );
+        } else if (mutation.type == 'update_item' && mutation.itemId != null) {
+          await _client.patch(
+            '/lists/$listId/items/${mutation.itemId}',
+            mutation.payload,
+          );
+        } else if (mutation.type == 'delete_item' && mutation.itemId != null) {
+          await _client.delete('/lists/$listId/items/${mutation.itemId}');
+        } else if (mutation.type == 'reorder_items') {
+          final ids = (mutation.payload['positions'] as List).cast<String>();
+          for (var i = 0; i < ids.length; i++) {
+            await _client.patch('/lists/$listId/items/${ids[i]}', {
+              'position': i,
+            });
+          }
         }
         await _offlineStore.remove(mutation.id);
         synced++;
@@ -493,6 +582,82 @@ class ListsRepository {
     updatedList['items'] = updatedItems;
     await _offlineStore.cacheListJson(listId, updatedList);
     return ShoppaListItem.fromJson(updatedItemJson!);
+  }
+
+  Future<ShoppaListItem> _queueUpdateItem(
+    String listId,
+    String itemId,
+    Map<String, dynamic> body,
+    DateTime clientUpdatedAt,
+  ) async {
+    final payload = Map<String, dynamic>.from(body);
+    if (!payload.containsKey('client_updated_at')) {
+      payload['client_updated_at'] = clientUpdatedAt.toIso8601String();
+    }
+    await _offlineStore.enqueue(QueuedMutation(
+      id: _generateLocalId(),
+      listId: listId,
+      itemId: itemId,
+      type: 'update_item',
+      payload: payload,
+      clientUpdatedAt: clientUpdatedAt.toIso8601String(),
+    ));
+    final optimistic = await _mergeItemInCache(listId, itemId, {
+      if (payload['name'] != null) 'name': payload['name'],
+      if (payload['quantity'] != null) 'quantity': payload['quantity'].toString(),
+      if (payload['unit'] != null) 'unit': payload['unit'],
+      if (payload['note'] != null) 'note': payload['note'],
+      if (payload['position'] != null) 'position': payload['position'],
+    });
+    return optimistic ??
+        ShoppaListItem(
+          id: itemId,
+          name: payload['name'] as String? ?? '',
+          quantity: payload['quantity'] as num? ?? 1,
+          unit: payload['unit'] as String? ?? 'ea',
+          note: payload['note'] as String? ?? '',
+          checked: false,
+        );
+  }
+
+  Future<void> _queueDeleteItem(String listId, String itemId) async {
+    final now = DateTime.now().toUtc();
+    await _offlineStore.enqueue(QueuedMutation(
+      id: _generateLocalId(),
+      listId: listId,
+      itemId: itemId,
+      type: 'delete_item',
+      payload: const {},
+      clientUpdatedAt: now.toIso8601String(),
+    ));
+    await _removeItemFromCache(listId, itemId);
+  }
+
+  Future<void> _removeItemFromCache(String listId, String itemId) async {
+    final cached = await _offlineStore.getCachedListJson(listId);
+    if (cached == null) return;
+    final items =
+        ((cached['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+    final updatedItems = items.where((item) => item['id'] != itemId).toList();
+    final updated = Map<String, dynamic>.from(cached);
+    updated['items'] = updatedItems;
+    updated['item_count'] = updatedItems.length;
+    await _offlineStore.cacheListJson(listId, updated);
+  }
+
+  Future<void> _reorderCache(String listId, List<String> orderedIds) async {
+    final cached = await _offlineStore.getCachedListJson(listId);
+    if (cached == null) return;
+    final items =
+        ((cached['items'] as List?) ?? []).cast<Map<String, dynamic>>();
+    final byId = {for (final item in items) item['id'] as String: item};
+    final reordered = orderedIds
+        .where(byId.containsKey)
+        .map((id) => byId[id]!)
+        .toList();
+    final updated = Map<String, dynamic>.from(cached);
+    updated['items'] = reordered;
+    await _offlineStore.cacheListJson(listId, updated);
   }
 
   String _generateLocalId() =>
