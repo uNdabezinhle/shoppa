@@ -183,3 +183,4 @@ class DeliveryQuotesApiTests(_DeliveryTestMixin, APITestCase):
         )
         self.assertEqual(spar["total_items"], 2)
         self.assertEqual(spar["available_items"], 1)
+

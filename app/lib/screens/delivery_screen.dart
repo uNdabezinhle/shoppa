@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 
+import 'dart:async';
+
+import '../core/delivery_realtime_client.dart';
 import '../core/delivery_repository.dart';
 import '../theme/shoppa_theme.dart';
 
@@ -10,12 +13,14 @@ class DeliveryScreen extends StatefulWidget {
   const DeliveryScreen({
     super.key,
     required this.deliveryRepository,
+    required this.deliveryRealtimeClient,
     required this.listId,
     required this.listTitle,
     this.regionLabel = 'South Africa',
   });
 
   final DeliveryRepository deliveryRepository;
+  final DeliveryRealtimeClient deliveryRealtimeClient;
   final String listId;
   final String listTitle;
   final String regionLabel;
@@ -26,11 +31,26 @@ class DeliveryScreen extends StatefulWidget {
 
 class _DeliveryScreenState extends State<DeliveryScreen> {
   late Future<ShoppaDeliveryQuotes> _quotes;
+  StreamSubscription<DeliveryRealtimeEvent>? _realtimeSub;
 
   @override
   void initState() {
     super.initState();
     _quotes = widget.deliveryRepository.fetchDeliveryQuotes(widget.listId);
+    _realtimeSub = widget.deliveryRealtimeClient
+        .connect(widget.listId)
+        .listen((event) {
+      if (event.event == 'quote.updated' ||
+          event.event == 'availability.changed') {
+        _reload();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    unawaited(_realtimeSub?.cancel());
+    super.dispose();
   }
 
   void _reload() {

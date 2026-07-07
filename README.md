@@ -10,21 +10,20 @@ Monorepo for Shoppa: a mobile-first shopping intelligence platform (South Africa
 
 ## Status (Milestone 4 — Delivery, July 2026)
 
-**Released:** `v0.0.3-m3` on `main` (Milestone 3 complete)
+**Released:** `v0.0.4-m4` on `main` (Milestone 4 complete)
 
-**Active branch:** `milestone/m4-delivery` (in progress)
+**Active branch:** `milestone/m5-subscriptions` (next)
 
-| Area | Done in M4 (so far) |
-|------|---------------------|
+| Area | Done in M4 |
+|------|------------|
 | **Adapter layer** | Common interface + four launch adapters (Checkers 60/60, PnP ASAP, SPAR 2U, Woolies Dash) |
 | **Delivery quotes** | `GET /v1/lists/{id}/delivery-quotes` — ETA, fee, stock, affiliate URL |
-| **Feature flags** | `DELIVERY_PLATFORMS_BY_REGION` toggles platforms per region |
-| **Delivery screen** | Compare tab CTA → `/delivery` with cheapest badge and order hand-off |
+| **Live delivery WS** | `ws/lists/{id}/delivery` — `quote.updated`, `availability.changed` |
+| **Promotion badges** | `has_promotion` on list items with non-intrusive PROMO chip (FR-7.2) |
+| **Delivery screen** | Compare tab CTA → `/delivery` with live quote refresh |
 | **M4 smoke** | `python scripts/m4_smoke.py` validates quotes + affiliate tracking |
 
 **Prior (M3 — `v0.0.3-m3`):** catalogue search, compare depth, promos, price-drop notifications.
-
-**Remaining for M4 gate:** live delivery WS channel, promotion badges in list views (FR-7.2), tag `v0.0.4-m4`.
 
 ## Git branching
 
@@ -32,7 +31,8 @@ Monorepo for Shoppa: a mobile-first shopping intelligence platform (South Africa
 |--------|---------|
 | `main` | Phase-gate releases only |
 | `milestone/m3-intelligence` | Phase 3 price intelligence (`v0.0.3-m3`) |
-| `milestone/m4-delivery` | Phase 4 delivery & fulfilment (current) |
+| `milestone/m4-delivery` | Phase 4 delivery & fulfilment (`v0.0.4-m4`) |
+| `milestone/m5-subscriptions` | Phase 5 subscriptions & professional tools (current) |
 | `feat(scope): …` | Feature branches off the active milestone branch |
 
 ## Getting started

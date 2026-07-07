@@ -136,7 +136,18 @@ def reconcile(product, store):
         if drop_ratio >= PRICE_DROP_ALERT_THRESHOLD:
             _create_price_drop_alerts(product, store, old_price, reconciled_price)
 
+    _notify_delivery_availability(product)
     return current
+
+
+def _notify_delivery_availability(product):
+    """Push availability.changed to delivery WS subscribers (Phase 4)."""
+    try:
+        from apps.delivery.realtime import notify_availability_changed
+
+        notify_availability_changed(product.id)
+    except Exception:
+        pass
 
 
 #: Region -> currency code, matching the API Specification's money

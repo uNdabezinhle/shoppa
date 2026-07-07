@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'core/api_client.dart';
 import 'core/app_deps.dart';
 import 'core/catalogue_repository.dart';
+import 'core/delivery_realtime_client.dart';
 import 'core/delivery_repository.dart';
 import 'core/app_router.dart';
 import 'core/auth_repository.dart';
@@ -53,6 +54,10 @@ void main() {
   );
   final notificationsRepository = NotificationsRepository(apiClient);
   final wsBaseUrl = _deriveWsBaseUrl(_apiBaseUrl);
+  final deliveryRealtimeClient = DeliveryRealtimeClient(
+    wsBaseUrl: wsBaseUrl,
+    tokenStore: tokenStore,
+  );
   final realtimeClient = ListRealtimeClient(
     wsBaseUrl: wsBaseUrl,
     tokenStore: tokenStore,
@@ -66,6 +71,7 @@ void main() {
     authRepository: authRepository,
     catalogueRepository: catalogueRepository,
     deliveryRepository: deliveryRepository,
+    deliveryRealtimeClient: deliveryRealtimeClient,
     listsRepository: listsRepository,
     notificationsRepository: notificationsRepository,
     realtimeClient: realtimeClient,

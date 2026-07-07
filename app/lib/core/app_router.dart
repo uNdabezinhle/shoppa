@@ -99,6 +99,7 @@ GoRouter createAppRouter(AppDeps deps) {
           final title = state.uri.queryParameters['title'] ?? 'List';
           return DeliveryScreen(
             deliveryRepository: deps.deliveryRepository,
+            deliveryRealtimeClient: deps.deliveryRealtimeClient,
             listId: listId,
             listTitle: title,
           );

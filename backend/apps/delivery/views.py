@@ -5,6 +5,7 @@ from rest_framework.views import APIView
 
 from apps.lists.views import SharedListMixin
 
+from .realtime import broadcast_delivery_event
 from .services import get_delivery_quotes_for_list
 
 
@@ -15,4 +16,6 @@ class ListDeliveryQuotesView(SharedListMixin, APIView):
 
     def get(self, request, list_id):
         list_obj = self.get_list()
-        return Response(get_delivery_quotes_for_list(list_obj))
+        payload = get_delivery_quotes_for_list(list_obj)
+        broadcast_delivery_event(list_obj.id, "quote.updated", payload)
+        return Response(payload)
