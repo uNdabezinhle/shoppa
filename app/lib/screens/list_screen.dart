@@ -3,11 +3,13 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../core/api_client.dart';
+import '../core/list_chat_client.dart';
 import '../core/list_realtime_client.dart';
 import '../core/lists_repository.dart';
 import '../core/session_summary.dart';
 import '../theme/shoppa_theme.dart';
 import '../widgets/item_form_dialog.dart';
+import '../widgets/presence_banner.dart';
 
 /// Item check-off view (SRS FR-2.2, FR-4.1) with a price-capture prompt
 /// on check-off (FR-4.3) and a session summary on completion (FR-4.4),
@@ -20,12 +22,16 @@ class ListScreen extends StatefulWidget {
     super.key,
     required this.listsRepository,
     required this.realtimeClient,
+    required this.chatClient,
+    this.currentUserEmail,
     required this.listId,
     required this.title,
   });
 
   final ListsRepository listsRepository;
   final ListRealtimeClient realtimeClient;
+  final ListChatClient chatClient;
+  final String? currentUserEmail;
   final String listId;
   final String title;
 
@@ -36,7 +42,11 @@ class ListScreen extends StatefulWidget {
 class _ListScreenState extends State<ListScreen> {
   late Future<ShoppaList> _list;
   StreamSubscription<ListRealtimeEvent>? _realtimeSubscription;
+  StreamSubscription<RealtimeConnectionState>? _connectionSubscription;
+  Timer? _reloadDebounce;
   int _pendingCount = 0;
+  final Map<String, String> _activeEditors = {};
+  RealtimeConnectionState _connectionState = RealtimeConnectionState.connecting;
   // SRS FR-5.3/FR-5.4: the store the shopper says they're currently in,
   // picked from the comparison sheet. Session-only (not persisted) --
   // once set, it's forwarded on every check-off so the server can record
@@ -54,14 +64,49 @@ class _ListScreenState extends State<ListScreen> {
     // pull-to-refresh -- this is deliberately a full refetch (not
     // incremental patching) so the screen can never drift from what the
     // REST detail endpoint says is true.
+    _connectionSubscription = widget.realtimeClient.connectionState.listen(
+      (state) {
+        if (!mounted) return;
+        setState(() => _connectionState = state);
+      },
+    );
     _realtimeSubscription = widget.realtimeClient
         .connect(widget.listId)
-        .listen((_) => _reload());
+        .listen(_onRealtimeEvent);
+  }
+
+  void _onRealtimeEvent(ListRealtimeEvent event) {
+    if (event.event == 'presence.joined') {
+      final userId = event.payload['user_id'] as String?;
+      final email = event.payload['email'] as String?;
+      if (userId != null &&
+          email != null &&
+          email != widget.currentUserEmail &&
+          mounted) {
+        setState(() => _activeEditors[userId] = email);
+      }
+      return;
+    }
+    if (event.event == 'presence.left') {
+      final userId = event.payload['user_id'] as String?;
+      if (userId != null && mounted) {
+        setState(() => _activeEditors.remove(userId));
+      }
+      return;
+    }
+    _scheduleReload();
+  }
+
+  void _scheduleReload() {
+    _reloadDebounce?.cancel();
+    _reloadDebounce = Timer(const Duration(milliseconds: 300), _reload);
   }
 
   @override
   void dispose() {
+    _reloadDebounce?.cancel();
     _realtimeSubscription?.cancel();
+    _connectionSubscription?.cancel();
     super.dispose();
   }
 
@@ -384,6 +429,19 @@ class _ListScreenState extends State<ListScreen> {
     );
   }
 
+  Future<void> _openChatSheet() async {
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => _ChatSheet(
+        listsRepository: widget.listsRepository,
+        chatClient: widget.chatClient,
+        listId: widget.listId,
+        currentUserEmail: widget.currentUserEmail,
+      ),
+    );
+  }
+
   /// SRS FR-5.3: shows per-store totals for this list. Tapping a store
   /// sets it as "shopping at" for the rest of this session (SRS FR-5.4),
   /// so subsequent check-offs implicitly submit a price observation for
@@ -478,6 +536,11 @@ class _ListScreenState extends State<ListScreen> {
             },
           ),
           IconButton(
+            tooltip: 'Chat',
+            icon: const Icon(Icons.chat_bubble_outline),
+            onPressed: _openChatSheet,
+          ),
+          IconButton(
             tooltip: 'Activity',
             icon: const Icon(Icons.history),
             onPressed: _openActivitySheet,
@@ -519,6 +582,10 @@ class _ListScreenState extends State<ListScreen> {
           final items = list.items ?? [];
           return Column(
             children: [
+              PresenceBanner(
+                editorEmails: _activeEditors.values.toList(),
+                connected: _connectionState == RealtimeConnectionState.connected,
+              ),
               if (list.fromCache)
                 _InfoBanner(
                   text: 'Offline — showing the last synced version of this list.',
@@ -788,11 +855,27 @@ class _ShareSheetState extends State<_ShareSheet> {
 }
 
 /// Read-only activity feed (SRS FR-3.3).
-class _ActivitySheet extends StatelessWidget {
+class _ActivitySheet extends StatefulWidget {
   const _ActivitySheet({required this.listsRepository, required this.listId});
 
   final ListsRepository listsRepository;
   final String listId;
+
+  @override
+  State<_ActivitySheet> createState() => _ActivitySheetState();
+}
+
+class _ActivitySheetState extends State<_ActivitySheet> {
+  late Future<List<ShoppaActivityEntry>> _entries;
+
+  @override
+  void initState() {
+    super.initState();
+    _entries = widget.listsRepository.fetchActivity(widget.listId);
+  }
+
+  void _reload() =>
+      setState(() => _entries = widget.listsRepository.fetchActivity(widget.listId));
 
   static const _labels = {
     'item_added': 'added an item',
@@ -803,6 +886,14 @@ class _ActivitySheet extends StatelessWidget {
     'collaborator_removed': 'removed a collaborator',
   };
 
+  String _formatTime(String iso) {
+    final dt = DateTime.tryParse(iso);
+    if (dt == null) return '';
+    final local = dt.toLocal();
+    return '${local.hour.toString().padLeft(2, '0')}:'
+        '${local.minute.toString().padLeft(2, '0')}';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -811,19 +902,29 @@ class _ActivitySheet extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Activity',
-            style: TextStyle(
-              color: ShoppaColors.ink,
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
-            ),
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Activity',
+                  style: TextStyle(
+                    color: ShoppaColors.ink,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.refresh, size: 20),
+                onPressed: _reload,
+              ),
+            ],
           ),
           const SizedBox(height: 12),
           ConstrainedBox(
             constraints: const BoxConstraints(maxHeight: 400),
             child: FutureBuilder<List<ShoppaActivityEntry>>(
-              future: listsRepository.fetchActivity(listId),
+              future: _entries,
               builder: (context, snapshot) {
                 if (snapshot.connectionState != ConnectionState.done) {
                   return const Padding(
@@ -858,6 +959,13 @@ class _ActivitySheet extends StatelessWidget {
                               text: ' — ${entry.detail}',
                               style: const TextStyle(color: ShoppaColors.mist),
                             ),
+                          TextSpan(
+                            text: ' · ${_formatTime(entry.createdAt)}',
+                            style: const TextStyle(
+                              color: ShoppaColors.faint,
+                              fontSize: 11,
+                            ),
+                          ),
                         ],
                       ),
                     );
@@ -865,6 +973,174 @@ class _ActivitySheet extends StatelessWidget {
                 );
               },
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Per-list chat thread (SRS FR-3.4).
+class _ChatSheet extends StatefulWidget {
+  const _ChatSheet({
+    required this.listsRepository,
+    required this.chatClient,
+    required this.listId,
+    this.currentUserEmail,
+  });
+
+  final ListsRepository listsRepository;
+  final ListChatClient chatClient;
+  final String listId;
+  final String? currentUserEmail;
+
+  @override
+  State<_ChatSheet> createState() => _ChatSheetState();
+}
+
+class _ChatSheetState extends State<_ChatSheet> {
+  late Future<List<ShoppaChatMessage>> _messages;
+  final _controller = TextEditingController();
+  StreamSubscription<ListChatEvent>? _subscription;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _messages = widget.listsRepository.fetchMessages(widget.listId);
+    _subscription = widget.chatClient.connect(widget.listId).listen((event) {
+      if (event.event == 'message.created' && mounted) _reload();
+    });
+  }
+
+  @override
+  void dispose() {
+    _subscription?.cancel();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _reload() =>
+      setState(() => _messages = widget.listsRepository.fetchMessages(widget.listId));
+
+  Future<void> _send() async {
+    final body = _controller.text.trim();
+    if (body.isEmpty) return;
+    setState(() => _error = null);
+    try {
+      await widget.listsRepository.sendMessage(widget.listId, body);
+      _controller.clear();
+      _reload();
+    } on ApiException catch (e) {
+      setState(() => _error = e.message);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 20,
+        right: 20,
+        top: 20,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Chat',
+            style: TextStyle(
+              color: ShoppaColors.ink,
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 12),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 320),
+            child: FutureBuilder<List<ShoppaChatMessage>>(
+              future: _messages,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState != ConnectionState.done) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                final messages = snapshot.data ?? [];
+                if (messages.isEmpty) {
+                  return const Text(
+                    'No messages yet — say hi to your collaborators.',
+                    style: TextStyle(color: ShoppaColors.mist),
+                  );
+                }
+                return ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: messages.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 8),
+                  itemBuilder: (context, index) {
+                    final msg = messages[index];
+                    final isMine = msg.authorEmail == widget.currentUserEmail;
+                    return Align(
+                      alignment:
+                          isMine ? Alignment.centerRight : Alignment.centerLeft,
+                      child: Container(
+                        constraints: const BoxConstraints(maxWidth: 280),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          color: isMine
+                              ? ShoppaColors.amber.withOpacity(0.18)
+                              : ShoppaColors.panel,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: ShoppaColors.line),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (!isMine)
+                              Text(
+                                msg.authorEmail.split('@').first,
+                                style: const TextStyle(
+                                  color: ShoppaColors.mist,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            Text(
+                              msg.body,
+                              style: const TextStyle(color: ShoppaColors.ink),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: 6),
+            Text(_error!, style: const TextStyle(color: ShoppaColors.rose)),
+          ],
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _controller,
+                  decoration: const InputDecoration(hintText: 'Message…'),
+                  onSubmitted: (_) => _send(),
+                ),
+              ),
+              const SizedBox(width: 8),
+              IconButton(
+                onPressed: _send,
+                icon: const Icon(Icons.send, color: ShoppaColors.amber),
+              ),
+            ],
           ),
         ],
       ),

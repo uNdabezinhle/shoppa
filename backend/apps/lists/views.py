@@ -67,7 +67,11 @@ class ListListView(generics.ListCreateAPIView):
     pagination_class = ListCursorPagination
 
     def get_queryset(self):
-        return _accessible_lists(self.request.user)
+        return (
+            _accessible_lists(self.request.user)
+            .select_related("owner")
+            .prefetch_related("collaborators__user")
+        )
 
     def perform_create(self, serializer):
         serializer.save(owner=self.request.user)

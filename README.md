@@ -8,25 +8,22 @@ Monorepo for Shoppa: a mobile-first shopping intelligence platform (South Africa
 - `app/` — Flutter application (`shoppa_app`) targeting iOS, Android, and Web.
 - `docker-compose.yml` — local Postgres + Redis + API + Celery stack.
 
-## Status (Milestone 1 — Foundation, July 2026)
+## Status (Milestone 2 — Collaboration, July 2026)
 
 **Released:** `v0.0.1-m1` on `main` (Milestone 1 complete)
 
-**Active branch:** `milestone/m2-collaboration`
+**Active branch:** `milestone/m2-collaboration` (in progress)
 
-| Area | Done in M1 |
-|------|------------|
-| **Backend auth** | `PATCH /users/me`, password-reset stub (`POST /auth/password-reset`), Personal→Professional upgrade (`POST /users/me/upgrade`) |
-| **Rate limits** | Auth endpoints 10/min/IP; authenticated reads 120/min/user |
-| **Mobile shell** | Bottom nav: Mall · Compare · Lists · Profile (`ShellRoute` + `go_router`) |
-| **List CRUD UI** | Create/edit/delete lists; add/edit items (qty/unit/note); swipe-delete; drag-reorder |
-| **Profile** | Account type, region, upgrade to Professional, logout |
-| **Offline queue** | Expanded mutations: `update_item`, `delete_item`, `reorder_items` |
-| **Mall tab** | Savings hero card driven by price comparison on latest list |
+| Area | Done in M2 (so far) |
+|------|---------------------|
+| **Presence** | `presence.joined` / `presence.left` on `ws/lists/{id}`; live-editing banner |
+| **Chat (FR-3.4)** | `GET/POST /lists/{id}/messages`, `ws/lists/{id}/chat`, in-list chat sheet |
+| **List index** | Collaborator avatar preview on `GET /lists` |
+| **Mobile UX** | WebSocket reconnect/backoff, debounced refetch, activity timestamps |
 
-**Prior (Sprint 0 — `v0.0.1-m0`):** persistent auth, `go_router`, Celery scaffold, seed data, regions API, docker-compose, CI.
+**Prior (M1 — `v0.0.1-m1`):** tab shell, list CRUD UI, rate limits, profile, expanded offline queue.
 
-**Next (M2):** real-time collaboration polish, WebSocket UX, activity feed enhancements.
+**Remaining for M2 gate:** TC-3.2 propagation perf test, Channels/Redis load test, share-sheet live refresh, tag `v0.0.2-m2`.
 
 ## Git branching
 
@@ -79,6 +76,17 @@ flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8000/v1
 ```
 
 Requires Flutter **3.22+** / Dart **3.4+** (matches CI stable channel).
+
+### Real-time (WebSockets)
+
+List sync and chat require the ASGI server (not plain `runserver` WSGI):
+
+```bash
+cd backend
+daphne -b 0.0.0.0 -p 8000 shoppa_api.asgi:application
+```
+
+With Redis (`REDIS_URL` set), presence and broadcasts fan out across workers.
 
 ## Conventions
 

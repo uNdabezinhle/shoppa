@@ -11,15 +11,18 @@ django_asgi_app = get_asgi_application()
 
 from channels.routing import ProtocolTypeRouter, URLRouter  # noqa: E402
 
+from apps.chat.routing import websocket_urlpatterns as chat_ws_urls  # noqa: E402
 from apps.lists.middleware import JWTAuthMiddlewareStack  # noqa: E402
-from apps.lists.routing import websocket_urlpatterns  # noqa: E402
+from apps.lists.routing import websocket_urlpatterns as list_ws_urls  # noqa: E402
 
 application = ProtocolTypeRouter(
     {
         "http": django_asgi_app,
-        # SRS FR-3.2 / API Specification §9: ws /lists/{id}. Mobile/web
-        # clients authenticate with the same JWT access token used for
-        # REST calls, passed as a query string param (see middleware.py).
-        "websocket": JWTAuthMiddlewareStack(URLRouter(websocket_urlpatterns)),
+        # SRS FR-3.2 / FR-3.4 / API Specification §9: ws /lists/{id} and
+        # ws /lists/{id}/chat. Clients authenticate with the same JWT
+        # access token used for REST, passed as a query string param.
+        "websocket": JWTAuthMiddlewareStack(
+            URLRouter(list_ws_urls + chat_ws_urls)
+        ),
     }
 )

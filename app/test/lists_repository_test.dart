@@ -545,6 +545,82 @@ void main() {
       expect(sentBody.containsKey('store_id'), false);
     });
 
+    test('fetchLists parses collaborator previews', () async {
+      final mockClient = MockClient((request) async {
+        return http.Response(
+          jsonEncode({
+            'results': [
+              {
+                'id': 'l-1',
+                'title': 'Shared Braai',
+                'category': 'groceries',
+                'is_recurring': false,
+                'item_count': 2,
+                'collaborators': [
+                  {
+                    'user_id': 'u-1',
+                    'email': 'owner@example.com',
+                    'initials': 'OW',
+                  },
+                  {
+                    'user_id': 'u-2',
+                    'email': 'friend@example.com',
+                    'initials': 'FR',
+                  },
+                ],
+              },
+            ],
+            'next': null,
+            'previous': null,
+          }),
+          200,
+        );
+      });
+      final repo = ListsRepository(
+        ApiClient(
+          baseUrl: 'http://localhost:8000/v1',
+          tokenStore: tokenStore,
+          httpClient: mockClient,
+        ),
+      );
+
+      final lists = await repo.fetchLists();
+
+      expect(lists.first.collaborators, hasLength(2));
+      expect(lists.first.collaborators.last.initials, 'FR');
+    });
+
+    test('sendMessage POSTs body to /messages', () async {
+      late Map<String, dynamic> sentBody;
+      final mockClient = MockClient((request) async {
+        expect(request.method, 'POST');
+        expect(request.url.path, '/v1/lists/l-1/messages');
+        sentBody = jsonDecode(request.body) as Map<String, dynamic>;
+        return http.Response(
+          jsonEncode({
+            'id': 'm-1',
+            'author_id': 'u-1',
+            'author_email': 'owner@example.com',
+            'body': 'On my way',
+            'created_at': '2026-07-07T10:00:00Z',
+          }),
+          201,
+        );
+      });
+      final repo = ListsRepository(
+        ApiClient(
+          baseUrl: 'http://localhost:8000/v1',
+          tokenStore: tokenStore,
+          httpClient: mockClient,
+        ),
+      );
+
+      final message = await repo.sendMessage('l-1', 'On my way');
+
+      expect(sentBody['body'], 'On my way');
+      expect(message.body, 'On my way');
+    });
+
     test('updateList PATCHes title and category', () async {
       late Map<String, dynamic> sentBody;
       final mockClient = MockClient((request) async {

@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
 from .models import ListActivity, ListCollaborator, ListItem, ShoppingList
+from .presence import email_initials
 
 
 class ListItemSerializer(serializers.ModelSerializer):
@@ -54,24 +55,64 @@ class ListItemSerializer(serializers.ModelSerializer):
         return instance
 
 
+class CollaboratorPreviewSerializer(serializers.Serializer):
+    user_id = serializers.UUIDField()
+    email = serializers.EmailField()
+    initials = serializers.CharField()
+
+
 class ShoppingListSerializer(serializers.ModelSerializer):
     item_count = serializers.IntegerField(source="items.count", read_only=True)
     role = serializers.SerializerMethodField()
+    collaborators = serializers.SerializerMethodField()
 
     class Meta:
         model = ShoppingList
         fields = [
             "id", "title", "category", "is_recurring", "recurrence",
             "is_public", "event_name", "event_date",
-            "item_count", "role", "created_at", "updated_at",
+            "item_count", "role", "collaborators",
+            "created_at", "updated_at",
         ]
-        read_only_fields = ["id", "item_count", "role", "created_at", "updated_at"]
+        read_only_fields = [
+            "id", "item_count", "role", "collaborators",
+            "created_at", "updated_at",
+        ]
 
     def get_role(self, obj):
         request = self.context.get("request")
         if request is None:
             return None
         return obj.role_for(request.user)
+
+    def get_collaborators(self, obj):
+        """Lightweight avatar-stack preview (owner + up to 3 collaborators)."""
+        previews = []
+        seen = set()
+        owner = obj.owner
+        previews.append(
+            {
+                "user_id": owner.id,
+                "email": owner.email,
+                "initials": email_initials(owner.email),
+            }
+        )
+        seen.add(owner.id)
+        collaborators = getattr(obj, "_prefetched_collaborators", None)
+        if collaborators is None:
+            collaborators = obj.collaborators.select_related("user").all()
+        for collab in collaborators:
+            if collab.user_id in seen or len(previews) >= 4:
+                continue
+            previews.append(
+                {
+                    "user_id": collab.user_id,
+                    "email": collab.user.email,
+                    "initials": email_initials(collab.user.email),
+                }
+            )
+            seen.add(collab.user_id)
+        return CollaboratorPreviewSerializer(previews, many=True).data
 
     def validate(self, attrs):
         # SRS FR-8.2 (publish) / FR-8.3 (event attach): both are

@@ -42,6 +42,50 @@ class ShoppaListItem {
   final bool hasPromotion;
 }
 
+class ShoppaCollaboratorPreview {
+  ShoppaCollaboratorPreview({
+    required this.userId,
+    required this.email,
+    required this.initials,
+  });
+
+  factory ShoppaCollaboratorPreview.fromJson(Map<String, dynamic> json) =>
+      ShoppaCollaboratorPreview(
+        userId: json['user_id'] as String,
+        email: json['email'] as String,
+        initials: json['initials'] as String,
+      );
+
+  final String userId;
+  final String email;
+  final String initials;
+}
+
+class ShoppaChatMessage {
+  ShoppaChatMessage({
+    required this.id,
+    required this.authorId,
+    required this.authorEmail,
+    required this.body,
+    required this.createdAt,
+  });
+
+  factory ShoppaChatMessage.fromJson(Map<String, dynamic> json) =>
+      ShoppaChatMessage(
+        id: json['id'] as String,
+        authorId: json['author_id'] as String,
+        authorEmail: json['author_email'] as String,
+        body: json['body'] as String,
+        createdAt: json['created_at'] as String,
+      );
+
+  final String id;
+  final String authorId;
+  final String authorEmail;
+  final String body;
+  final String createdAt;
+}
+
 class ShoppaList {
   ShoppaList({
     required this.id,
@@ -50,6 +94,7 @@ class ShoppaList {
     required this.isRecurring,
     required this.itemCount,
     this.role,
+    this.collaborators = const [],
     this.items,
     this.fromCache = false,
   });
@@ -62,6 +107,10 @@ class ShoppaList {
         isRecurring: json['is_recurring'] as bool? ?? false,
         itemCount: json['item_count'] as int? ?? 0,
         role: json['role'] as String?,
+        collaborators: (json['collaborators'] as List? ?? [])
+            .map((e) =>
+                ShoppaCollaboratorPreview.fromJson(e as Map<String, dynamic>))
+            .toList(),
         items: json['items'] != null
             ? (json['items'] as List)
                 .map((e) => ShoppaListItem.fromJson(e as Map<String, dynamic>))
@@ -75,6 +124,7 @@ class ShoppaList {
   final String category;
   final bool isRecurring;
   final int itemCount;
+  final List<ShoppaCollaboratorPreview> collaborators;
   /// "owner", "edit", or "view" (API Specification role field, SRS
   /// FR-3.1) -- null only if the server response omitted it.
   final String? role;
@@ -707,6 +757,26 @@ class ListsRepository {
     return results
         .map((e) => ShoppaPromotion.fromJson(e as Map<String, dynamic>))
         .toList();
+  }
+
+  /// SRS FR-3.4: per-list chat history.
+  Future<List<ShoppaChatMessage>> fetchMessages(String listId) async {
+    final json =
+        await _client.get('/lists/$listId/messages') as Map<String, dynamic>;
+    final results = json['results'] as List;
+    return results
+        .map((e) => ShoppaChatMessage.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// SRS FR-3.4: send a chat message (also pushed via WebSocket).
+  Future<ShoppaChatMessage> sendMessage(String listId, String body) async {
+    final json = await _client.post(
+      '/lists/$listId/messages',
+      {'body': body},
+      authenticated: true,
+    ) as Map<String, dynamic>;
+    return ShoppaChatMessage.fromJson(json);
   }
 
   /// SRS FR-7.3: opt out of promotions from one store, or from an entire

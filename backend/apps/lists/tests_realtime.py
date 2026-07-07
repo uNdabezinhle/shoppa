@@ -96,6 +96,28 @@ class ListConsumerTests(TransactionTestCase):
         self.assertTrue(connected)
         await communicator.disconnect()
 
+    async def test_connect_broadcasts_presence_joined_to_other_subscriber(self):
+        friend = await self._create_collaborator()
+        owner_token = _access_token_for(self.owner)
+        friend_token = _access_token_for(friend)
+
+        owner_comm = self._communicator(owner_token)
+        self.assertTrue((await owner_comm.connect())[0])
+
+        friend_comm = self._communicator(friend_token)
+        self.assertTrue((await friend_comm.connect())[0])
+
+        message = await owner_comm.receive_json_from()
+        self.assertEqual(message["event"], "presence.joined")
+        self.assertEqual(message["payload"]["email"], "ws-friend@example.com")
+
+        await friend_comm.disconnect()
+        left = await owner_comm.receive_json_from()
+        self.assertEqual(left["event"], "presence.left")
+        self.assertEqual(left["payload"]["user_id"], str(friend.id))
+
+        await owner_comm.disconnect()
+
     async def _create_collaborator(self):
         from channels.db import database_sync_to_async
 

@@ -45,5 +45,15 @@ void main() {
     test('returns null for a JSON array instead of an object', () {
       expect(ListRealtimeEvent.tryParse('[1, 2, 3]'), isNull);
     });
+
+    test('parses presence.joined with email and initials', () {
+      final event = ListRealtimeEvent.tryParse(
+        '{"event": "presence.joined", "payload": {"user_id": "u-2", "email": "friend@example.com", "initials": "FR"}}',
+      );
+
+      expect(event!.event, 'presence.joined');
+      expect(event.payload['email'], 'friend@example.com');
+      expect(event.payload['initials'], 'FR');
+    });
   });
 }

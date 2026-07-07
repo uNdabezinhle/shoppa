@@ -90,6 +90,8 @@ GoRouter createAppRouter(AppDeps deps) {
           return ListScreen(
             listsRepository: deps.listsRepository,
             realtimeClient: deps.realtimeClient,
+            chatClient: deps.chatClient,
+            currentUserEmail: deps.authState.user?.email,
             listId: listId,
             title: title,
           );

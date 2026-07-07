@@ -6,6 +6,7 @@ import 'core/app_deps.dart';
 import 'core/app_router.dart';
 import 'core/auth_repository.dart';
 import 'core/auth_state.dart';
+import 'core/list_chat_client.dart';
 import 'core/list_realtime_client.dart';
 import 'core/lists_repository.dart';
 import 'core/offline_store.dart';
@@ -45,8 +46,13 @@ void main() {
     apiClient,
     offlineStore: SharedPreferencesOfflineStore(),
   );
+  final wsBaseUrl = _deriveWsBaseUrl(_apiBaseUrl);
   final realtimeClient = ListRealtimeClient(
-    wsBaseUrl: _deriveWsBaseUrl(_apiBaseUrl),
+    wsBaseUrl: wsBaseUrl,
+    tokenStore: tokenStore,
+  );
+  final chatClient = ListChatClient(
+    wsBaseUrl: wsBaseUrl,
     tokenStore: tokenStore,
   );
   final authState = AuthState(authRepository);
@@ -54,6 +60,7 @@ void main() {
     authRepository: authRepository,
     listsRepository: listsRepository,
     realtimeClient: realtimeClient,
+    chatClient: chatClient,
     authState: authState,
   );
   final router = createAppRouter(deps);

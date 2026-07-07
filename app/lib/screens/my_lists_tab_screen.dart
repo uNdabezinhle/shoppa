@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 
 import '../core/lists_repository.dart';
 import '../theme/shoppa_theme.dart';
+import '../widgets/collaborator_avatar_stack.dart';
 import '../widgets/list_form_dialog.dart';
 
 class MyListsTabScreen extends StatefulWidget {
@@ -143,12 +144,20 @@ class _MyListsTabScreenState extends State<MyListsTabScreen> {
                     onTap: () => context.push(
                       '/lists/${list.id}?title=${Uri.encodeComponent(list.title)}',
                     ),
-                    trailing: list.isOwner
-                        ? IconButton(
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (list.collaborators.length > 1)
+                          CollaboratorAvatarStack(
+                            collaborators: list.collaborators,
+                          ),
+                        if (list.isOwner)
+                          IconButton(
                             icon: const Icon(Icons.edit_outlined),
                             onPressed: () => _editList(list),
-                          )
-                        : null,
+                          ),
+                      ],
+                    ),
                   ),
                 );
               },

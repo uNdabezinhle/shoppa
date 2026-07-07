@@ -1,7 +1,6 @@
-/// Real-time list collaboration (SRS FR-3.2, API Specification §9:
-/// ws /lists/{id}). Server -> client only: item.*, collaborator.*,
-/// presence.joined, presence.left. The client's job on list mutations
-/// is to refetch; presence events update the live-editing banner.
+/// Per-list chat WebSocket client (SRS FR-3.4, API Specification §9:
+/// ws /lists/{id}/chat). Receives message.created events pushed after
+/// POST /lists/{id}/messages.
 import 'dart:async';
 import 'dart:convert';
 
@@ -9,13 +8,10 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'token_store.dart';
 
-enum RealtimeConnectionState { connecting, connected, reconnecting }
+class ListChatEvent {
+  ListChatEvent({required this.event, required this.payload});
 
-class ListRealtimeEvent {
-  ListRealtimeEvent({required this.event, required this.payload});
-
-  factory ListRealtimeEvent.fromJson(Map<String, dynamic> json) =>
-      ListRealtimeEvent(
+  factory ListChatEvent.fromJson(Map<String, dynamic> json) => ListChatEvent(
         event: json['event'] as String,
         payload: (json['payload'] as Map?)?.cast<String, dynamic>() ??
             const <String, dynamic>{},
@@ -24,67 +20,54 @@ class ListRealtimeEvent {
   final String event;
   final Map<String, dynamic> payload;
 
-  static ListRealtimeEvent? tryParse(String raw) {
+  static ListChatEvent? tryParse(String raw) {
     try {
       final decoded = jsonDecode(raw);
       if (decoded is Map<String, dynamic> && decoded['event'] is String) {
-        return ListRealtimeEvent.fromJson(decoded);
+        return ListChatEvent.fromJson(decoded);
       }
     } catch (_) {}
     return null;
   }
 }
 
-class ListRealtimeClient {
-  ListRealtimeClient({required this.wsBaseUrl, required this.tokenStore});
+class ListChatClient {
+  ListChatClient({required this.wsBaseUrl, required this.tokenStore});
 
   final String wsBaseUrl;
   final TokenStore tokenStore;
 
   WebSocketChannel? _channel;
-  StreamController<ListRealtimeEvent>? _controller;
-  final _connectionState = StreamController<RealtimeConnectionState>.broadcast();
+  StreamController<ListChatEvent>? _controller;
   String? _activeListId;
   bool _disposed = false;
 
-  Stream<RealtimeConnectionState> get connectionState =>
-      _connectionState.stream;
-
-  Stream<ListRealtimeEvent> connect(String listId) {
+  Stream<ListChatEvent> connect(String listId) {
     unawaited(_teardown());
     _activeListId = listId;
     _disposed = false;
-    final controller = StreamController<ListRealtimeEvent>.broadcast();
+    final controller = StreamController<ListChatEvent>.broadcast();
     _controller = controller;
-    _emitState(RealtimeConnectionState.connecting);
     unawaited(_connectAsync(listId, controller, attempt: 0));
     return controller.stream;
   }
 
-  void _emitState(RealtimeConnectionState state) {
-    if (!_connectionState.isClosed) {
-      _connectionState.add(state);
-    }
-  }
-
   Future<void> _connectAsync(
     String listId,
-    StreamController<ListRealtimeEvent> controller, {
+    StreamController<ListChatEvent> controller, {
     required int attempt,
   }) async {
     if (_disposed || _activeListId != listId) return;
-    if (attempt > 0) _emitState(RealtimeConnectionState.reconnecting);
     try {
       final token = await tokenStore.accessToken;
-      final uri = Uri.parse('$wsBaseUrl/ws/lists/$listId/').replace(
+      final uri = Uri.parse('$wsBaseUrl/ws/lists/$listId/chat/').replace(
         queryParameters: token != null ? {'token': token} : null,
       );
       final channel = WebSocketChannel.connect(uri);
       _channel = channel;
-      _emitState(RealtimeConnectionState.connected);
       channel.stream.listen(
         (message) {
-          final event = ListRealtimeEvent.tryParse(message as String);
+          final event = ListChatEvent.tryParse(message as String);
           if (event != null && !controller.isClosed) controller.add(event);
         },
         onError: (_) => _scheduleReconnect(listId, controller, attempt),
@@ -98,11 +81,10 @@ class ListRealtimeClient {
 
   void _scheduleReconnect(
     String listId,
-    StreamController<ListRealtimeEvent> controller,
+    StreamController<ListChatEvent> controller,
     int attempt,
   ) {
     if (_disposed || _activeListId != listId || controller.isClosed) return;
-    _emitState(RealtimeConnectionState.reconnecting);
     final delay = Duration(milliseconds: 500 * (1 << attempt.clamp(0, 4)));
     Future.delayed(delay, () {
       if (!_disposed && _activeListId == listId && !controller.isClosed) {
@@ -122,6 +104,5 @@ class ListRealtimeClient {
     _disposed = true;
     _activeListId = null;
     unawaited(_teardown());
-    unawaited(_connectionState.close());
   }
 }
