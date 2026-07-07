@@ -2,10 +2,16 @@ name: backend-ci
 
 on:
   push:
+    branches:
+      - main
+      - milestone/**
     paths:
       - "backend/**"
       - ".github/workflows/backend-ci.yml"
   pull_request:
+    branches:
+      - main
+      - milestone/**
     paths:
       - "backend/**"
       - ".github/workflows/backend-ci.yml"

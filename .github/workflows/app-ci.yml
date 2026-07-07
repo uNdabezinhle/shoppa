@@ -2,10 +2,16 @@ name: app-ci
 
 on:
   push:
+    branches:
+      - main
+      - milestone/**
     paths:
       - "app/**"
       - ".github/workflows/app-ci.yml"
   pull_request:
+    branches:
+      - main
+      - milestone/**
     paths:
       - "app/**"
       - ".github/workflows/app-ci.yml"
