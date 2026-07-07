@@ -162,11 +162,19 @@ class ApiClient {
     );
   }
 
-  Future<dynamic> get(String path, {bool authenticated = true}) async {
+  Future<dynamic> get(
+    String path, {
+    bool authenticated = true,
+    Map<String, String>? queryParameters,
+  }) async {
+    var uri = _uri(path);
+    if (queryParameters != null && queryParameters.isNotEmpty) {
+      uri = uri.replace(queryParameters: queryParameters);
+    }
     return _request(
       path,
       () async => _client.get(
-        _uri(path),
+        uri,
         headers: await _headers(authenticated: authenticated),
       ),
       authenticated: authenticated,

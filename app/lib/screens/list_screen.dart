@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../core/api_client.dart';
+import '../core/catalogue_repository.dart';
 import '../core/list_chat_client.dart';
 import '../core/list_realtime_client.dart';
 import '../core/lists_repository.dart';
@@ -10,6 +11,7 @@ import '../core/session_summary.dart';
 import '../theme/shoppa_theme.dart';
 import '../widgets/item_form_dialog.dart';
 import '../widgets/presence_banner.dart';
+import '../widgets/product_picker_sheet.dart';
 
 /// Item check-off view (SRS FR-2.2, FR-4.1) with a price-capture prompt
 /// on check-off (FR-4.3) and a session summary on completion (FR-4.4),
@@ -21,6 +23,7 @@ class ListScreen extends StatefulWidget {
   const ListScreen({
     super.key,
     required this.listsRepository,
+    required this.catalogueRepository,
     required this.realtimeClient,
     required this.chatClient,
     this.currentUserEmail,
@@ -29,6 +32,7 @@ class ListScreen extends StatefulWidget {
   });
 
   final ListsRepository listsRepository;
+  final CatalogueRepository catalogueRepository;
   final ListRealtimeClient realtimeClient;
   final ListChatClient chatClient;
   final String? currentUserEmail;
@@ -157,7 +161,7 @@ class _ListScreenState extends State<ListScreen> {
       // against yet (that lands with Phase 3), so this is scoped to
       // "enter the price paid, or skip" for now.
       if (!mounted) return;
-      paidPrice = await _promptForPrice(item.name);
+      paidPrice = await _promptForPrice(item);
       if (!mounted) return;
     }
     await widget.listsRepository.setItemChecked(
@@ -173,18 +177,42 @@ class _ListScreenState extends State<ListScreen> {
 
   /// Returns the entered price in minor units (cents), or null if the
   /// user skipped/cancelled/entered something unparsable.
-  Future<int?> _promptForPrice(String itemName) async {
-    final controller = TextEditingController();
+  Future<int?> _promptForPrice(ShoppaListItem item) async {
+    ProductStorePrice? storePrice;
+    if (item.productId != null && _shoppingAtStoreId != null) {
+      storePrice = await widget.catalogueRepository.fetchStorePrice(
+        productId: item.productId!,
+        storeId: _shoppingAtStoreId!,
+      );
+    }
+    final controller = TextEditingController(
+      text: storePrice != null
+          ? (storePrice.price / 100).toStringAsFixed(2)
+          : '',
+    );
+    final hint = storePrice != null
+        ? 'Suggested price (${storePrice.confidence} confidence)'
+        : null;
     final result = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('Price paid for $itemName'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          decoration: const InputDecoration(hintText: 'e.g. 45.99', prefixText: 'R '),
-          onSubmitted: (value) => Navigator.of(context).pop(value),
+        title: Text('Price paid for ${item.name}'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (hint != null) ...[
+              Text(hint, style: const TextStyle(color: ShoppaColors.mist, fontSize: 12)),
+              const SizedBox(height: 8),
+            ],
+            TextField(
+              controller: controller,
+              autofocus: true,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(hintText: 'e.g. 45.99', prefixText: 'R '),
+              onSubmitted: (value) => Navigator.of(context).pop(value),
+            ),
+          ],
         ),
         actions: [
           TextButton(
@@ -211,7 +239,15 @@ class _ListScreenState extends State<ListScreen> {
   }
 
   Future<void> _addItem() async {
-    final values = await showItemFormDialog(context);
+    final product = await showProductPickerSheet(
+      context,
+      catalogueRepository: widget.catalogueRepository,
+    );
+    final values = await showItemFormDialog(
+      context,
+      initialName: product?.name,
+      title: product == null ? 'Add item' : 'Add catalogue item',
+    );
     if (values == null) return;
     try {
       await widget.listsRepository.addItem(
@@ -220,6 +256,7 @@ class _ListScreenState extends State<ListScreen> {
         quantity: values['quantity'] as num,
         unit: values['unit'] as String,
         note: values['note'] as String,
+        productId: product?.id,
       );
       _reload();
     } on ApiException catch (e) {
@@ -482,7 +519,14 @@ class _ListScreenState extends State<ListScreen> {
   /// exists, savings) on completion. Computed purely from the
   /// already-loaded list -- no extra request, so it works offline too.
   Future<void> _openSessionSummary(ShoppaList list) async {
-    final summary = SessionSummary.fromItems(list.items ?? []);
+    ShoppaComparison? comparison;
+    try {
+      comparison = await widget.listsRepository.fetchComparison(widget.listId);
+    } catch (_) {}
+    final summary = SessionSummary.fromItems(
+      list.items ?? [],
+      comparison: comparison,
+    );
     await showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
@@ -499,6 +543,17 @@ class _ListScreenState extends State<ListScreen> {
               'Total spent: ${summary.formattedTotalSpent}',
               style: const TextStyle(fontWeight: FontWeight.w700),
             ),
+            if (summary.hasSavings) ...[
+              const SizedBox(height: 8),
+              Text(
+                'You could save up to ${summary.formattedPotentialSavings} shopping at the best store',
+                style: const TextStyle(
+                  color: ShoppaColors.green,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                ),
+              ),
+            ],
             if (summary.hasIncompletePricing) ...[
               const SizedBox(height: 8),
               Text(
@@ -506,11 +561,13 @@ class _ListScreenState extends State<ListScreen> {
                 style: const TextStyle(color: ShoppaColors.mist, fontSize: 12),
               ),
             ],
-            const SizedBox(height: 8),
-            const Text(
-              'Savings vs. other stores arrive with price comparison (Phase 3).',
-              style: TextStyle(color: ShoppaColors.mist, fontSize: 12),
-            ),
+            if (!summary.hasSavings) ...[
+              const SizedBox(height: 8),
+              const Text(
+                'Link items to the catalogue to see savings vs other stores.',
+                style: TextStyle(color: ShoppaColors.mist, fontSize: 12),
+              ),
+            ],
           ],
         ),
         actions: [

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
 import '../core/auth_repository.dart';
 import '../core/auth_state.dart';
@@ -69,6 +70,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     )
                   : const Text('Upgrade to Professional'),
             ),
+          const SizedBox(height: 12),
+          ListTile(
+            tileColor: ShoppaColors.panel,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            leading: const Icon(Icons.local_offer_outlined, color: ShoppaColors.amber),
+            title: const Text('Promotions', style: TextStyle(color: ShoppaColors.ink)),
+            subtitle: const Text(
+              'Deals matched to your lists',
+              style: TextStyle(color: ShoppaColors.mist, fontSize: 12),
+            ),
+            trailing: const Icon(Icons.chevron_right, color: ShoppaColors.mist),
+            onTap: () => context.push('/promotions'),
+          ),
           const SizedBox(height: 12),
           OutlinedButton(
             onPressed: () => widget.authState.logout(),

@@ -1,5 +1,6 @@
 import 'auth_repository.dart';
 import 'auth_state.dart';
+import 'catalogue_repository.dart';
 import 'list_chat_client.dart';
 import 'list_realtime_client.dart';
 import 'lists_repository.dart';
@@ -8,6 +9,7 @@ import 'lists_repository.dart';
 class AppDeps {
   AppDeps({
     required this.authRepository,
+    required this.catalogueRepository,
     required this.listsRepository,
     required this.realtimeClient,
     required this.chatClient,
@@ -15,6 +17,7 @@ class AppDeps {
   });
 
   final AuthRepository authRepository;
+  final CatalogueRepository catalogueRepository;
   final ListsRepository listsRepository;
   final ListRealtimeClient realtimeClient;
   final ListChatClient chatClient;

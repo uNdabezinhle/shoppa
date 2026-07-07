@@ -34,12 +34,20 @@ class _MallTabScreenState extends State<MallTabScreen> {
   Future<_MallData> _load() async {
     final lists = await widget.listsRepository.fetchLists();
     ShoppaComparison? comparison;
+    var promotionCount = 0;
     if (lists.isNotEmpty) {
       try {
         comparison = await widget.listsRepository.fetchComparison(lists.first.id);
       } catch (_) {}
     }
-    return _MallData(lists: lists, comparison: comparison);
+    try {
+      promotionCount = (await widget.listsRepository.fetchPromotions()).length;
+    } catch (_) {}
+    return _MallData(
+      lists: lists,
+      comparison: comparison,
+      promotionCount: promotionCount,
+    );
   }
 
   Future<void> _refresh() async {
@@ -92,6 +100,26 @@ class _MallTabScreenState extends State<MallTabScreen> {
                   ),
                   const SizedBox(height: 16),
                   _SavingsHero(comparison: data.comparison),
+                  if (data.promotionCount > 0) ...[
+                    const SizedBox(height: 12),
+                    ListTile(
+                      tileColor: ShoppaColors.panel,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        side: BorderSide(color: ShoppaColors.amber.withOpacity(0.35)),
+                      ),
+                      leading: const Icon(Icons.local_offer, color: ShoppaColors.amber),
+                      title: Text(
+                        '${data.promotionCount} promotion${data.promotionCount == 1 ? '' : 's'} for your lists',
+                        style: const TextStyle(
+                          color: ShoppaColors.ink,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      trailing: const Icon(Icons.chevron_right, color: ShoppaColors.mist),
+                      onTap: () => context.push('/promotions'),
+                    ),
+                  ],
                   const SizedBox(height: 20),
                   const Text(
                     'Recent Lists',
@@ -142,9 +170,14 @@ class _MallTabScreenState extends State<MallTabScreen> {
 }
 
 class _MallData {
-  _MallData({required this.lists, this.comparison});
+  _MallData({
+    required this.lists,
+    this.comparison,
+    this.promotionCount = 0,
+  });
   final List<ShoppaList> lists;
   final ShoppaComparison? comparison;
+  final int promotionCount;
 }
 
 class _SavingsHero extends StatelessWidget {

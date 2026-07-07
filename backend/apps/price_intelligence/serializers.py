@@ -4,7 +4,20 @@ PrimaryKeyRelatedField(source=...).
 """
 from rest_framework import serializers
 
-from .models import PriceObservation, Product, Store
+from .models import CurrentPrice, PriceObservation, Product, Store
+
+
+class ProductSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Product
+        fields = ["id", "name", "region"]
+        read_only_fields = fields
+
+
+class ProductStorePriceSerializer(serializers.Serializer):
+    store_id = serializers.UUIDField()
+    price = serializers.IntegerField()
+    confidence = serializers.CharField()
 
 
 class PriceObservationSerializer(serializers.ModelSerializer):

@@ -15,6 +15,7 @@ class ShoppaListItem {
     required this.unit,
     required this.note,
     required this.checked,
+    this.productId,
     this.paidPrice,
     this.hasPromotion = false,
   });
@@ -26,6 +27,7 @@ class ShoppaListItem {
         unit: json['unit'] as String? ?? 'ea',
         note: json['note'] as String? ?? '',
         checked: json['checked'] as bool? ?? false,
+        productId: json['product_id'] as String?,
         paidPrice: json['paid_price'] as int?,
         hasPromotion: json['has_promotion'] as bool? ?? false,
       );
@@ -36,6 +38,7 @@ class ShoppaListItem {
   final String unit;
   final String note;
   final bool checked;
+  final String? productId;
   final int? paidPrice;
   /// SRS FR-7.2: a live, non-opted-out promotion matches this item's
   /// product. False for free-text items (no product_id) by definition.
@@ -312,12 +315,14 @@ class ListsRepository {
     num quantity = 1,
     String unit = 'ea',
     String note = '',
+    String? productId,
   }) async {
     final payload = <String, dynamic>{
       'name': name,
       'quantity': quantity,
       'unit': unit,
       'note': note,
+      if (productId != null) 'product_id': productId,
     };
     try {
       final json = await _client.post('/lists/$listId/items', payload,

@@ -590,6 +590,41 @@ void main() {
       expect(lists.first.collaborators.last.initials, 'FR');
     });
 
+    test('addItem sends product_id when provided', () async {
+      late Map<String, dynamic> sentBody;
+      final mockClient = MockClient((request) async {
+        sentBody = jsonDecode(request.body) as Map<String, dynamic>;
+        return http.Response(
+          jsonEncode({
+            'id': 'i-1',
+            'product_id': 'p-1',
+            'name': 'Full Cream Milk 2L',
+            'quantity': '1.00',
+            'unit': 'ea',
+            'note': '',
+            'checked': false,
+          }),
+          201,
+        );
+      });
+      final repo = ListsRepository(
+        ApiClient(
+          baseUrl: 'http://localhost:8000/v1',
+          tokenStore: tokenStore,
+          httpClient: mockClient,
+        ),
+      );
+
+      final item = await repo.addItem(
+        'l-1',
+        name: 'Full Cream Milk 2L',
+        productId: 'p-1',
+      );
+
+      expect(sentBody['product_id'], 'p-1');
+      expect(item.name, 'Full Cream Milk 2L');
+    });
+
     test('sendMessage POSTs body to /messages', () async {
       late Map<String, dynamic> sentBody;
       final mockClient = MockClient((request) async {

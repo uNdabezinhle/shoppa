@@ -13,113 +13,228 @@ class CompareTabScreen extends StatefulWidget {
 }
 
 class _CompareTabScreenState extends State<CompareTabScreen> {
-  late Future<_CompareViewData> _data;
+  List<ShoppaList> _lists = [];
+  String? _selectedListId;
+  late Future<ShoppaComparison?> _comparison;
+  bool _loadingLists = true;
 
   @override
   void initState() {
     super.initState();
-    _data = _load();
+    _comparison = Future.value(null);
+    _loadLists();
   }
 
-  Future<_CompareViewData> _load() async {
+  Future<void> _loadLists() async {
+    setState(() => _loadingLists = true);
     final lists = await widget.listsRepository.fetchLists();
-    if (lists.isEmpty) return _CompareViewData.empty();
-    final comparison =
-        await widget.listsRepository.fetchComparison(lists.first.id);
-    return _CompareViewData(listTitle: lists.first.title, comparison: comparison);
+    if (!mounted) return;
+    setState(() {
+      _lists = lists;
+      _selectedListId = lists.isNotEmpty ? lists.first.id : null;
+      _loadingLists = false;
+    });
+    if (_selectedListId != null) _loadComparison();
+  }
+
+  void _loadComparison() {
+    final listId = _selectedListId;
+    if (listId == null) return;
+    setState(() {
+      _comparison = widget.listsRepository.fetchComparison(listId);
+    });
   }
 
   String _formatZar(int cents) => 'R${(cents / 100).toStringAsFixed(2)}';
+
+  ShoppaList? get _selectedList {
+    if (_selectedListId == null) return null;
+    for (final list in _lists) {
+      if (list.id == _selectedListId) return list;
+    }
+    return null;
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Compare')),
-      body: FutureBuilder<_CompareViewData>(
-        future: _data,
-        builder: (context, snapshot) {
-          if (!snapshot.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          final data = snapshot.data!;
-          if (data.comparison == null || data.comparison!.isEmpty) {
-            return const Center(
-              child: Padding(
-                padding: EdgeInsets.all(24),
-                child: Text(
-                  'Add items with catalogue prices to see store comparisons.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: ShoppaColors.mist),
-                ),
-              ),
-            );
-          }
-          final comparison = data.comparison!;
-          return ListView(
-            padding: const EdgeInsets.all(20),
-            children: [
-              if (data.listTitle != null)
-                Text(
-                  data.listTitle!,
-                  style: const TextStyle(
-                    color: ShoppaColors.mist,
-                    fontSize: 13,
-                  ),
-                ),
-              if (comparison.bestSaves != null && comparison.bestSaves! > 0)
-                Container(
-                  margin: const EdgeInsets.only(top: 12, bottom: 16),
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: ShoppaColors.green.withOpacity(0.12),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: ShoppaColors.green.withOpacity(0.3)),
-                  ),
-                  child: Text(
-                    'Best deal saves ${_formatZar(comparison.bestSaves!)}',
-                    style: const TextStyle(
-                      color: ShoppaColors.green,
-                      fontWeight: FontWeight.w700,
+      body: _loadingLists
+          ? const Center(child: CircularProgressIndicator())
+          : _lists.isEmpty
+              ? const Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Text(
+                      'Create a list and add catalogue items to compare stores.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: ShoppaColors.mist),
                     ),
                   ),
-                ),
-              ...comparison.stores.map((store) {
-                final isBest = store.storeId == comparison.bestStoreId;
-                return Card(
-                  color: ShoppaColors.panel,
-                  margin: const EdgeInsets.only(bottom: 10),
-                  child: ListTile(
-                    title: Text(store.name,
-                        style: TextStyle(
-                          color: ShoppaColors.ink,
-                          fontWeight: isBest ? FontWeight.w700 : FontWeight.w500,
-                        )),
-                    subtitle: Text(
-                      'Confidence: ${store.confidence}',
-                      style: const TextStyle(color: ShoppaColors.mist, fontSize: 12),
-                    ),
-                    trailing: Text(
-                      _formatZar(store.total),
-                      style: TextStyle(
-                        color: isBest ? ShoppaColors.green : ShoppaColors.ink,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
+                )
+              : RefreshIndicator(
+                  onRefresh: _loadLists,
+                  child: FutureBuilder<ShoppaComparison?>(
+                    future: _comparison,
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState != ConnectionState.done) {
+                        return const ListView(
+                          children: [
+                            SizedBox(
+                              height: 200,
+                              child: Center(child: CircularProgressIndicator()),
+                            ),
+                          ],
+                        );
+                      }
+                      final comparison = snapshot.data;
+                      final selected = _selectedList;
+                      final worstTotal = comparison != null &&
+                              comparison.stores.isNotEmpty
+                          ? comparison.stores.last.total
+                          : null;
+
+                      return ListView(
+                        padding: const EdgeInsets.all(20),
+                        children: [
+                          DropdownButtonFormField<String>(
+                            value: _selectedListId,
+                            decoration: const InputDecoration(labelText: 'List'),
+                            items: _lists
+                                .map(
+                                  (list) => DropdownMenuItem(
+                                    value: list.id,
+                                    child: Text(list.title),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: (id) {
+                              if (id == null) return;
+                              setState(() => _selectedListId = id);
+                              _loadComparison();
+                            },
+                          ),
+                          if (selected != null) ...[
+                            const SizedBox(height: 8),
+                            Text(
+                              '${selected.itemCount} items',
+                              style: const TextStyle(
+                                color: ShoppaColors.mist,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                          if (comparison == null || comparison.isEmpty) ...[
+                            const SizedBox(height: 40),
+                            const Text(
+                              'Add catalogue-linked items to this list to compare store totals.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: ShoppaColors.mist),
+                            ),
+                          ] else ...[
+                            if (comparison.bestSaves != null &&
+                                comparison.bestSaves! > 0 &&
+                                comparison.bestStoreId != null) ...[
+                              const SizedBox(height: 16),
+                              Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    colors: [
+                                      ShoppaColors.green.withOpacity(0.2),
+                                      ShoppaColors.panel2,
+                                    ],
+                                  ),
+                                  borderRadius: BorderRadius.circular(14),
+                                  border: Border.all(
+                                    color: ShoppaColors.green.withOpacity(0.35),
+                                  ),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      'Best deal',
+                                      style: TextStyle(
+                                        color: ShoppaColors.green,
+                                        fontWeight: FontWeight.w800,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      comparison.stores
+                                          .firstWhere(
+                                            (s) =>
+                                                s.storeId ==
+                                                comparison.bestStoreId,
+                                            orElse: () => comparison.stores.first,
+                                          )
+                                          .name,
+                                      style: const TextStyle(
+                                        color: ShoppaColors.ink,
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      'Save ${_formatZar(comparison.bestSaves!)} vs most expensive store',
+                                      style: const TextStyle(
+                                        color: ShoppaColors.green,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                            const SizedBox(height: 16),
+                            ...comparison.stores.map((store) {
+                              final isBest =
+                                  store.storeId == comparison.bestStoreId;
+                              final extra = worstTotal != null && !isBest
+                                  ? store.total - comparison.stores.first.total
+                                  : 0;
+                              return Card(
+                                color: ShoppaColors.panel,
+                                margin: const EdgeInsets.only(bottom: 10),
+                                child: ListTile(
+                                  title: Text(
+                                    store.name,
+                                    style: TextStyle(
+                                      color: ShoppaColors.ink,
+                                      fontWeight:
+                                          isBest ? FontWeight.w700 : FontWeight.w500,
+                                    ),
+                                  ),
+                                  subtitle: Text(
+                                    'Confidence: ${store.confidence}'
+                                    '${extra > 0 ? ' · +${_formatZar(extra)} vs best' : ''}',
+                                    style: const TextStyle(
+                                      color: ShoppaColors.mist,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                  trailing: Text(
+                                    _formatZar(store.total),
+                                    style: TextStyle(
+                                      color: isBest
+                                          ? ShoppaColors.green
+                                          : ShoppaColors.ink,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ),
+                              );
+                            }),
+                          ],
+                        ],
+                      );
+                    },
                   ),
-                );
-              }),
-            ],
-          );
-        },
-      ),
+                ),
     );
   }
-}
-
-class _CompareViewData {
-  _CompareViewData({this.listTitle, this.comparison});
-  _CompareViewData.empty() : listTitle = null, comparison = null;
-
-  final String? listTitle;
-  final ShoppaComparison? comparison;
 }

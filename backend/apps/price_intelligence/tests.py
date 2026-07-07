@@ -277,3 +277,50 @@ class PriceDropAlertTests(TestCase):
         self.assertEqual(
             PriceAlert.objects.filter(user=self.owner, product=self.product).count(), 0
         )
+
+
+class ProductApiTests(TestCase):
+    """M3 catalogue endpoints: search and store-price lookup."""
+
+    def setUp(self):
+        from django.urls import reverse
+        from rest_framework.test import APIClient
+
+        from .models import Product, Store
+
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username="catalogue@example.com",
+            email="catalogue@example.com",
+            password="pw12345!",
+            region="ZA",
+        )
+        self.client.force_authenticate(self.user)
+        self.milk = Product.objects.create(name="Full Cream Milk 2L", region="ZA")
+        Product.objects.create(name="Brown Bread 700g", region="ZA")
+        self.store = Store.objects.create(name="Checkers", region="ZA")
+        record_observation(
+            product=self.milk,
+            store=self.store,
+            price=3299,
+            source=PriceSource.SCRAPED,
+        )
+        self.search_url = reverse("products-search")
+        self.store_price_url = reverse(
+            "product-store-price", kwargs={"product_id": self.milk.id}
+        )
+
+    def test_product_search_filters_by_query_and_region(self):
+        response = self.client.get(self.search_url, {"q": "milk"})
+        self.assertEqual(response.status_code, 200)
+        names = [row["name"] for row in response.data["results"]]
+        self.assertIn("Full Cream Milk 2L", names)
+        self.assertNotIn("Brown Bread 700g", names)
+
+    def test_store_price_returns_current_reconciled_price(self):
+        response = self.client.get(
+            self.store_price_url, {"store_id": str(self.store.id)}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["price"], 3299)
+        self.assertEqual(response.data["confidence"], Confidence.HIGH)

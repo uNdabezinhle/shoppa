@@ -8,24 +8,25 @@ Monorepo for Shoppa: a mobile-first shopping intelligence platform (South Africa
 - `app/` — Flutter application (`shoppa_app`) targeting iOS, Android, and Web.
 - `docker-compose.yml` — local Postgres + Redis + API + Celery stack.
 
-## Status (Milestone 2 — Collaboration, July 2026)
+## Status (Milestone 3 — Intelligence, July 2026)
 
 **Released:** `v0.0.2-m2` on `main` (Milestone 2 complete)
 
-**Active branch:** `milestone/m3-intelligence` (next)
+**Active branch:** `milestone/m3-intelligence` (in progress)
 
-| Area | Done in M2 |
-|------|------------|
-| **FR-3.1 Share** | View/edit permissions, collaborator sheet with live WS refresh |
-| **FR-3.2 Real-time** | `ws/lists/{id}`, presence, reconnect/backoff, TC-3.2 propagation test |
-| **FR-3.3 Activity** | Per-list feed with timestamps and pull-to-refresh |
-| **FR-3.4 Chat** | `GET/POST /lists/{id}/messages`, `ws/lists/{id}/chat`, in-list chat sheet |
-| **Mobile polish** | Presence banner, collaborator avatar stack, debounced refetch |
-| **Load gate** | 32-subscriber fan-out test + `scripts/ws_loadtest.py` for staging |
+| Area | Done in M3 (so far) |
+|------|---------------------|
+| **Catalogue search** | `GET /v1/products?q=` — region-scoped product search |
+| **Store price lookup** | `GET /v1/products/{id}/store-price?store_id=` for shop-mode prefill |
+| **Catalogue-linked items** | Product picker on add-item; `product_id` sent to API |
+| **Compare depth** | List selector, winner banner, savings vs worst store |
+| **Session summary** | Spend + potential savings from comparison (FR-4.4 / FR-5.3) |
+| **Promotions polish** | Seeded promos; Mall chip + Profile link to `/promotions` |
+| **M3 smoke** | `python scripts/m3_smoke.py` validates savings + promos after seed |
 
-**Prior (M1 — `v0.0.1-m1`):** tab shell, list CRUD UI, rate limits, profile, expanded offline queue.
+**Prior (M2 — `v0.0.2-m2`):** presence, chat, collaborator avatars, WS reconnect.
 
-**Next (M3):** price intelligence UX, promotions polish, comparison depth.
+**Remaining for M3 gate:** price-drop notification feed (TC-5.5), scraper task skeleton, tag `v0.0.3-m3`.
 
 ## Git branching
 
@@ -88,13 +89,13 @@ cd backend
 daphne -b 0.0.0.0 -p 8000 shoppa_api.asgi:application
 ```
 
-With Redis (`REDIS_URL` set), presence and broadcasts fan out across workers.
-
-### Staging load probe (M2 gate)
+### M3 demo flow
 
 ```bash
 cd backend
-python scripts/ws_loadtest.py --list-id <uuid> --subscribers 50
+python manage.py seed_launch_data
+python scripts/m3_smoke.py
+# In the app: add "Full Cream Milk 2L" from catalogue → Compare tab shows store savings
 ```
 
 ## Conventions

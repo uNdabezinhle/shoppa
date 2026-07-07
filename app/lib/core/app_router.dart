@@ -89,6 +89,7 @@ GoRouter createAppRouter(AppDeps deps) {
           final title = state.uri.queryParameters['title'] ?? 'List';
           return ListScreen(
             listsRepository: deps.listsRepository,
+            catalogueRepository: deps.catalogueRepository,
             realtimeClient: deps.realtimeClient,
             chatClient: deps.chatClient,
             currentUserEmail: deps.authState.user?.email,

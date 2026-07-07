@@ -9,8 +9,10 @@ from decimal import Decimal
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
+from apps.lists.models import ListCategory
 from apps.price_intelligence.models import PriceSource, Product, Store
 from apps.price_intelligence.services import record_observation
+from apps.promotions.models import Promotion
 from apps.regions.models import Region
 
 # Store slug -> display name (launch retailers, Architecture §7.1).
@@ -49,6 +51,24 @@ LAUNCH_PRODUCTS = {
     }),
 }
 
+# Demo promotions for M3 E2E (FR-7.1 / FR-7.2).
+LAUNCH_PROMOTIONS = [
+    {
+        "product_key": "milk",
+        "store_slug": "checkers",
+        "title": "20% off milk",
+        "description": "This week at Checkers",
+        "category": ListCategory.GROCERIES,
+    },
+    {
+        "product_key": "bread",
+        "store_slug": "pnp",
+        "title": "Brown bread special",
+        "description": "Pick n Pay bakery deal",
+        "category": ListCategory.GROCERIES,
+    },
+]
+
 
 class Command(BaseCommand):
     help = "Seed ZA region, launch stores, catalogue products, and starter prices."
@@ -82,12 +102,14 @@ class Command(BaseCommand):
             )
 
         now = timezone.now()
-        for _key, (product_name, prices) in LAUNCH_PRODUCTS.items():
+        products_by_key = {}
+        for key, (product_name, prices) in LAUNCH_PRODUCTS.items():
             product, created = Product.objects.get_or_create(
                 name=product_name,
                 region="ZA",
                 defaults={},
             )
+            products_by_key[key] = product
             self.stdout.write(
                 f"  Product {product_name} {'created' if created else 'exists'}"
             )
@@ -100,5 +122,22 @@ class Command(BaseCommand):
                     source=PriceSource.SCRAPED,
                     observed_at=now,
                 )
+
+        for promo in LAUNCH_PROMOTIONS:
+            product = products_by_key[promo["product_key"]]
+            store = stores_by_slug[promo["store_slug"]]
+            _, created = Promotion.objects.update_or_create(
+                store=store,
+                product=product,
+                title=promo["title"],
+                defaults={
+                    "description": promo["description"],
+                    "category": promo["category"],
+                    "is_active": True,
+                },
+            )
+            self.stdout.write(
+                f"  Promotion {promo['title']} {'created' if created else 'updated'}"
+            )
 
         self.stdout.write(self.style.SUCCESS("Launch seed data complete."))
