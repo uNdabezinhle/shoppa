@@ -1,26 +1,20 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
 import '../core/api_client.dart';
 import '../core/auth_repository.dart';
-import '../core/list_realtime_client.dart';
-import '../core/lists_repository.dart';
+import '../core/auth_state.dart';
 import '../theme/shoppa_theme.dart';
-import 'home_screen.dart';
-import 'register_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({
     super.key,
     required this.authRepository,
-    required this.listsRepository,
-    required this.realtimeClient,
-    this.onLoggedIn,
+    required this.authState,
   });
 
   final AuthRepository authRepository;
-  final ListsRepository listsRepository;
-  final ListRealtimeClient realtimeClient;
-  final void Function(ShoppaUser user)? onLoggedIn;
+  final AuthState authState;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -43,20 +37,7 @@ class _LoginScreenState extends State<LoginScreen> {
         password: _passwordController.text,
       );
       if (!mounted) return;
-      if (widget.onLoggedIn != null) {
-        widget.onLoggedIn!(user);
-      } else {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(
-            builder: (_) => HomeScreen(
-              authRepository: widget.authRepository,
-              listsRepository: widget.listsRepository,
-              realtimeClient: widget.realtimeClient,
-              user: user,
-            ),
-          ),
-        );
-      }
+      widget.authState.setUser(user);
     } on ApiException catch (e) {
       setState(() => _error = e.message);
     } finally {
@@ -119,16 +100,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     : const Text('Log in'),
               ),
               TextButton(
-                onPressed: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => RegisterScreen(
-                      authRepository: widget.authRepository,
-                      listsRepository: widget.listsRepository,
-                      realtimeClient: widget.realtimeClient,
-                      onLoggedIn: widget.onLoggedIn,
-                    ),
-                  ),
-                ),
+                onPressed: () => context.push('/register'),
                 child: const Text('Create an account'),
               ),
             ],

@@ -1,13 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
 import 'core/api_client.dart';
+import 'core/app_deps.dart';
+import 'core/app_router.dart';
 import 'core/auth_repository.dart';
+import 'core/auth_state.dart';
 import 'core/list_realtime_client.dart';
 import 'core/lists_repository.dart';
 import 'core/offline_store.dart';
 import 'core/token_store.dart';
-import 'screens/home_screen.dart';
-import 'screens/login_screen.dart';
 import 'theme/shoppa_theme.dart';
 
 /// API base URL is overridable at build time, e.g.:
@@ -47,83 +49,46 @@ void main() {
     wsBaseUrl: _deriveWsBaseUrl(_apiBaseUrl),
     tokenStore: tokenStore,
   );
-
-  runApp(ShoppaApp(
+  final authState = AuthState(authRepository);
+  final deps = AppDeps(
     authRepository: authRepository,
     listsRepository: listsRepository,
     realtimeClient: realtimeClient,
-  ));
+    authState: authState,
+  );
+  final router = createAppRouter(deps);
+
+  runApp(ShoppaApp(router: router, authState: authState));
 }
 
 class ShoppaApp extends StatefulWidget {
   const ShoppaApp({
     super.key,
-    required this.authRepository,
-    required this.listsRepository,
-    required this.realtimeClient,
+    required this.router,
+    required this.authState,
   });
 
-  final AuthRepository authRepository;
-  final ListsRepository listsRepository;
-  final ListRealtimeClient realtimeClient;
+  final GoRouter router;
+  final AuthState authState;
 
   @override
   State<ShoppaApp> createState() => _ShoppaAppState();
 }
 
 class _ShoppaAppState extends State<ShoppaApp> {
-  bool _bootstrapping = true;
-  ShoppaUser? _user;
-
   @override
   void initState() {
     super.initState();
-    _restoreSession();
-  }
-
-  Future<void> _restoreSession() async {
-    final user = await widget.authRepository.restoreSession();
-    if (!mounted) return;
-    setState(() {
-      _user = user;
-      _bootstrapping = false;
-    });
-  }
-
-  void _onLoggedIn(ShoppaUser user) {
-    setState(() => _user = user);
-  }
-
-  Future<void> _onLoggedOut() async {
-    await widget.authRepository.logout();
-    if (!mounted) return;
-    setState(() => _user = null);
+    widget.authState.bootstrap();
   }
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
+    return MaterialApp.router(
       title: 'Shoppa',
       debugShowCheckedModeBanner: false,
       theme: ShoppaTheme.dark,
-      home: _bootstrapping
-          ? const Scaffold(
-              body: Center(child: CircularProgressIndicator()),
-            )
-          : _user == null
-              ? LoginScreen(
-                  authRepository: widget.authRepository,
-                  listsRepository: widget.listsRepository,
-                  realtimeClient: widget.realtimeClient,
-                  onLoggedIn: _onLoggedIn,
-                )
-              : HomeScreen(
-                  authRepository: widget.authRepository,
-                  listsRepository: widget.listsRepository,
-                  realtimeClient: widget.realtimeClient,
-                  user: _user!,
-                  onLoggedOut: _onLoggedOut,
-                ),
+      routerConfig: widget.router,
     );
   }
 }

@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
 import '../core/auth_repository.dart';
+import '../core/auth_state.dart';
 import '../core/list_realtime_client.dart';
 import '../core/lists_repository.dart';
 import '../theme/shoppa_theme.dart';
-import 'list_screen.dart';
-import 'promotions_screen.dart';
 
 /// "Mall" home screen: greets the user (proving GET /v1/users/me works)
 /// and shows their shopping lists (proving GET /v1/lists works). Matches
@@ -17,15 +17,15 @@ class HomeScreen extends StatefulWidget {
     required this.authRepository,
     required this.listsRepository,
     required this.realtimeClient,
+    required this.authState,
     required this.user,
-    this.onLoggedOut,
   });
 
   final AuthRepository authRepository;
   final ListsRepository listsRepository;
   final ListRealtimeClient realtimeClient;
+  final AuthState authState;
   final ShoppaUser user;
-  final VoidCallback? onLoggedOut;
 
   String get _greetingName => user.email.split('@').first;
 
@@ -68,20 +68,13 @@ class _HomeScreenState extends State<HomeScreen> {
           IconButton(
             tooltip: 'Promotions',
             icon: const Icon(Icons.local_offer_outlined),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => PromotionsScreen(
-                  listsRepository: widget.listsRepository,
-                ),
-              ),
-            ),
+            onPressed: () => context.push('/promotions'),
           ),
-          if (widget.onLoggedOut != null)
-            IconButton(
-              tooltip: 'Log out',
-              icon: const Icon(Icons.logout),
-              onPressed: widget.onLoggedOut,
-            ),
+          IconButton(
+            tooltip: 'Log out',
+            icon: const Icon(Icons.logout),
+            onPressed: () => widget.authState.logout(),
+          ),
         ],
       ),
       body: SafeArea(
@@ -141,15 +134,8 @@ class _HomeScreenState extends State<HomeScreen> {
                               padding: const EdgeInsets.only(bottom: 11),
                               child: _ListCard(
                                 list: list,
-                                onTap: () => Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) => ListScreen(
-                                      listsRepository: widget.listsRepository,
-                                      realtimeClient: widget.realtimeClient,
-                                      listId: list.id,
-                                      title: list.title,
-                                    ),
-                                  ),
+                                onTap: () => context.push(
+                                  '/lists/${list.id}?title=${Uri.encodeComponent(list.title)}',
                                 ),
                               ),
                             ))

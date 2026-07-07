@@ -1,25 +1,20 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
 import '../core/api_client.dart';
 import '../core/auth_repository.dart';
-import '../core/list_realtime_client.dart';
-import '../core/lists_repository.dart';
+import '../core/auth_state.dart';
 import '../theme/shoppa_theme.dart';
-import 'home_screen.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({
     super.key,
     required this.authRepository,
-    required this.listsRepository,
-    required this.realtimeClient,
-    this.onLoggedIn,
+    required this.authState,
   });
 
   final AuthRepository authRepository;
-  final ListsRepository listsRepository;
-  final ListRealtimeClient realtimeClient;
-  final void Function(ShoppaUser user)? onLoggedIn;
+  final AuthState authState;
 
   @override
   State<RegisterScreen> createState() => _RegisterScreenState();
@@ -46,21 +41,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         password: _passwordController.text,
       );
       if (!mounted) return;
-      if (widget.onLoggedIn != null) {
-        widget.onLoggedIn!(user);
-        Navigator.of(context).popUntil((route) => route.isFirst);
-      } else {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(
-            builder: (_) => HomeScreen(
-              authRepository: widget.authRepository,
-              listsRepository: widget.listsRepository,
-              realtimeClient: widget.realtimeClient,
-              user: user,
-            ),
-          ),
-        );
-      }
+      widget.authState.setUser(user);
     } on ApiException catch (e) {
       setState(() => _error = e.fields != null
           ? e.fields!.values.first.toString()
@@ -80,7 +61,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Create your account')),
+      appBar: AppBar(
+        title: const Text('Create your account'),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => context.pop(),
+        ),
+      ),
       body: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
