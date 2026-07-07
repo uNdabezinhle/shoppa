@@ -17,13 +17,17 @@ class HomeScreen extends StatefulWidget {
     required this.authRepository,
     required this.listsRepository,
     required this.realtimeClient,
-    required this.greetingName,
+    required this.user,
+    this.onLoggedOut,
   });
 
   final AuthRepository authRepository;
   final ListsRepository listsRepository;
   final ListRealtimeClient realtimeClient;
-  final String greetingName;
+  final ShoppaUser user;
+  final VoidCallback? onLoggedOut;
+
+  String get _greetingName => user.email.split('@').first;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -72,6 +76,12 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
           ),
+          if (widget.onLoggedOut != null)
+            IconButton(
+              tooltip: 'Log out',
+              icon: const Icon(Icons.logout),
+              onPressed: widget.onLoggedOut,
+            ),
         ],
       ),
       body: SafeArea(
@@ -81,7 +91,7 @@ class _HomeScreenState extends State<HomeScreen> {
             padding: const EdgeInsets.all(20),
             children: [
               Text(
-                'Sawubona, ${widget.greetingName} 👋',
+                'Sawubona, ${widget._greetingName} 👋',
                 style: const TextStyle(color: ShoppaColors.mist, fontSize: 14),
               ),
               const SizedBox(height: 4),

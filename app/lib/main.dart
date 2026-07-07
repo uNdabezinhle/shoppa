@@ -6,6 +6,7 @@ import 'core/list_realtime_client.dart';
 import 'core/lists_repository.dart';
 import 'core/offline_store.dart';
 import 'core/token_store.dart';
+import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
 import 'theme/shoppa_theme.dart';
 
@@ -33,7 +34,9 @@ String _deriveWsBaseUrl(String apiBaseUrl) {
 }
 
 void main() {
-  final tokenStore = InMemoryTokenStore();
+  WidgetsFlutterBinding.ensureInitialized();
+
+  final tokenStore = SecureTokenStore();
   final apiClient = ApiClient(baseUrl: _apiBaseUrl, tokenStore: tokenStore);
   final authRepository = AuthRepository(apiClient);
   final listsRepository = ListsRepository(
@@ -52,7 +55,7 @@ void main() {
   ));
 }
 
-class ShoppaApp extends StatelessWidget {
+class ShoppaApp extends StatefulWidget {
   const ShoppaApp({
     super.key,
     required this.authRepository,
@@ -65,16 +68,62 @@ class ShoppaApp extends StatelessWidget {
   final ListRealtimeClient realtimeClient;
 
   @override
+  State<ShoppaApp> createState() => _ShoppaAppState();
+}
+
+class _ShoppaAppState extends State<ShoppaApp> {
+  bool _bootstrapping = true;
+  ShoppaUser? _user;
+
+  @override
+  void initState() {
+    super.initState();
+    _restoreSession();
+  }
+
+  Future<void> _restoreSession() async {
+    final user = await widget.authRepository.restoreSession();
+    if (!mounted) return;
+    setState(() {
+      _user = user;
+      _bootstrapping = false;
+    });
+  }
+
+  void _onLoggedIn(ShoppaUser user) {
+    setState(() => _user = user);
+  }
+
+  Future<void> _onLoggedOut() async {
+    await widget.authRepository.logout();
+    if (!mounted) return;
+    setState(() => _user = null);
+  }
+
+  @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Shoppa',
       debugShowCheckedModeBanner: false,
       theme: ShoppaTheme.dark,
-      home: LoginScreen(
-        authRepository: authRepository,
-        listsRepository: listsRepository,
-        realtimeClient: realtimeClient,
-      ),
+      home: _bootstrapping
+          ? const Scaffold(
+              body: Center(child: CircularProgressIndicator()),
+            )
+          : _user == null
+              ? LoginScreen(
+                  authRepository: widget.authRepository,
+                  listsRepository: widget.listsRepository,
+                  realtimeClient: widget.realtimeClient,
+                  onLoggedIn: _onLoggedIn,
+                )
+              : HomeScreen(
+                  authRepository: widget.authRepository,
+                  listsRepository: widget.listsRepository,
+                  realtimeClient: widget.realtimeClient,
+                  user: _user!,
+                  onLoggedOut: _onLoggedOut,
+                ),
     );
   }
 }

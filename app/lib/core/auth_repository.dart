@@ -62,4 +62,22 @@ class AuthRepository {
     final json = await _client.get('/users/me');
     return ShoppaUser.fromJson(json);
   }
+
+  /// Restores a session from persisted tokens. Returns null when no refresh
+  /// token is stored or the session is no longer valid (expired/revoked).
+  Future<ShoppaUser?> restoreSession() async {
+    if (!await _client.tokenStore.hasSession) return null;
+    try {
+      return await fetchMe();
+    } on ApiException catch (e) {
+      if (e.statusCode == 401) await _client.tokenStore.clear();
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> logout() async {
+    await _client.tokenStore.clear();
+  }
 }

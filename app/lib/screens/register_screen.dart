@@ -13,11 +13,13 @@ class RegisterScreen extends StatefulWidget {
     required this.authRepository,
     required this.listsRepository,
     required this.realtimeClient,
+    this.onLoggedIn,
   });
 
   final AuthRepository authRepository;
   final ListsRepository listsRepository;
   final ListRealtimeClient realtimeClient;
+  final void Function(ShoppaUser user)? onLoggedIn;
 
   @override
   State<RegisterScreen> createState() => _RegisterScreenState();
@@ -44,16 +46,21 @@ class _RegisterScreenState extends State<RegisterScreen> {
         password: _passwordController.text,
       );
       if (!mounted) return;
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (_) => HomeScreen(
-            authRepository: widget.authRepository,
-            listsRepository: widget.listsRepository,
-            realtimeClient: widget.realtimeClient,
-            greetingName: user.email.split('@').first,
+      if (widget.onLoggedIn != null) {
+        widget.onLoggedIn!(user);
+        Navigator.of(context).popUntil((route) => route.isFirst);
+      } else {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => HomeScreen(
+              authRepository: widget.authRepository,
+              listsRepository: widget.listsRepository,
+              realtimeClient: widget.realtimeClient,
+              user: user,
+            ),
           ),
-        ),
-      );
+        );
+      }
     } on ApiException catch (e) {
       setState(() => _error = e.fields != null
           ? e.fields!.values.first.toString()

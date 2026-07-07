@@ -137,5 +137,84 @@ void main() {
 
       expect(capturedHeaders['Authorization'], 'Bearer stored-access-token');
     });
+
+    test('restoreSession returns null when no refresh token is stored',
+        () async {
+      final client = ApiClient(
+        baseUrl: 'http://localhost:8000/v1',
+        tokenStore: tokenStore,
+        httpClient: MockClient((_) async => http.Response('{}', 200)),
+      );
+      final repo = AuthRepository(client);
+
+      expect(await repo.restoreSession(), isNull);
+    });
+
+    test('restoreSession returns the user when fetchMe succeeds', () async {
+      await tokenStore.save(access: 'access-token', refresh: 'refresh-token');
+      final mockClient = MockClient((request) async {
+        return http.Response(
+          jsonEncode({
+            'id': 'a5f1c2e0-0000-0000-0000-000000000001',
+            'email': 'shopper@example.com',
+            'account_type': 'personal',
+            'region': 'ZA',
+          }),
+          200,
+        );
+      });
+      final client = ApiClient(
+        baseUrl: 'http://localhost:8000/v1',
+        tokenStore: tokenStore,
+        httpClient: mockClient,
+      );
+      final repo = AuthRepository(client);
+
+      final user = await repo.restoreSession();
+      expect(user?.email, 'shopper@example.com');
+    });
+
+    test('restoreSession clears tokens and returns null on unauthorized',
+        () async {
+      await tokenStore.save(access: 'bad-access', refresh: 'bad-refresh');
+      final mockClient = MockClient((request) async {
+        if (request.url.path.endsWith('/auth/refresh')) {
+          return http.Response(
+            jsonEncode({
+              'error': {'code': 'unauthorized', 'message': 'Token is invalid'},
+            }),
+            401,
+          );
+        }
+        return http.Response(
+          jsonEncode({
+            'error': {'code': 'unauthorized', 'message': 'Unauthorized'},
+          }),
+          401,
+        );
+      });
+      final client = ApiClient(
+        baseUrl: 'http://localhost:8000/v1',
+        tokenStore: tokenStore,
+        httpClient: mockClient,
+      );
+      final repo = AuthRepository(client);
+
+      expect(await repo.restoreSession(), isNull);
+      expect(await tokenStore.hasSession, isFalse);
+    });
+
+    test('logout clears stored tokens', () async {
+      await tokenStore.save(access: 'a', refresh: 'r');
+      final client = ApiClient(
+        baseUrl: 'http://localhost:8000/v1',
+        tokenStore: tokenStore,
+        httpClient: MockClient((_) async => http.Response('{}', 200)),
+      );
+      final repo = AuthRepository(client);
+
+      await repo.logout();
+      expect(await tokenStore.hasSession, isFalse);
+    });
   });
 }

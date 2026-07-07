@@ -45,6 +45,8 @@ class ApiClient {
   final TokenStore tokenStore;
   final http.Client _client;
 
+  Future<void>? _refreshInFlight;
+
   Uri _uri(String path) => Uri.parse('$baseUrl$path');
 
   Future<Map<String, String>> _headers({bool authenticated = true}) async {
@@ -69,29 +71,106 @@ class ApiClient {
     }
   }
 
+  bool _canAutoRefresh(String path) {
+    return path != '/auth/refresh' &&
+        path != '/auth/login' &&
+        path != '/auth/register';
+  }
+
+  /// Transparently renews the access token using the stored refresh token
+  /// (SRS FR-1.3). Concurrent 401s share one in-flight refresh.
+  Future<bool> refreshTokens() async {
+    if (_refreshInFlight != null) {
+      await _refreshInFlight;
+      return (await tokenStore.accessToken) != null;
+    }
+
+    final completer = _doRefresh();
+    _refreshInFlight = completer;
+    try {
+      return await completer;
+    } finally {
+      _refreshInFlight = null;
+    }
+  }
+
+  Future<bool> _doRefresh() async {
+    final refresh = await tokenStore.refreshToken;
+    if (refresh == null || refresh.isEmpty) return false;
+
+    try {
+      final response = await _send(
+        () async => _client.post(
+          _uri('/auth/refresh'),
+          headers: await _headers(authenticated: false),
+          body: jsonEncode({'refresh': refresh}),
+        ),
+      );
+      final decoded = _decode(response) as Map<String, dynamic>;
+      final access = decoded['access'] as String?;
+      if (access == null || access.isEmpty) {
+        await tokenStore.clear();
+        return false;
+      }
+      final rotated = decoded['refresh'] as String? ?? refresh;
+      await tokenStore.save(access: access, refresh: rotated);
+      return true;
+    } on ApiException {
+      await tokenStore.clear();
+      return false;
+    }
+  }
+
+  Future<dynamic> _request(
+    String path,
+    Future<http.Response> Function() send, {
+    required bool authenticated,
+  }) async {
+    var retried = false;
+    while (true) {
+      final response = await _send(send);
+      try {
+        return _decode(response);
+      } on ApiException catch (e) {
+        if (e.statusCode == 401 &&
+            authenticated &&
+            !retried &&
+            _canAutoRefresh(path)) {
+          retried = true;
+          final refreshed = await refreshTokens();
+          if (!refreshed) rethrow;
+          continue;
+        }
+        rethrow;
+      }
+    }
+  }
+
   Future<dynamic> post(
     String path,
     Map<String, dynamic> body, {
     bool authenticated = false,
   }) async {
-    final response = await _send(
+    return _request(
+      path,
       () async => _client.post(
         _uri(path),
         headers: await _headers(authenticated: authenticated),
         body: jsonEncode(body),
       ),
+      authenticated: authenticated,
     );
-    return _decode(response);
   }
 
   Future<dynamic> get(String path, {bool authenticated = true}) async {
-    final response = await _send(
+    return _request(
+      path,
       () async => _client.get(
         _uri(path),
         headers: await _headers(authenticated: authenticated),
       ),
+      authenticated: authenticated,
     );
-    return _decode(response);
   }
 
   Future<dynamic> patch(
@@ -99,26 +178,26 @@ class ApiClient {
     Map<String, dynamic> body, {
     bool authenticated = true,
   }) async {
-    final response = await _send(
+    return _request(
+      path,
       () async => _client.patch(
         _uri(path),
         headers: await _headers(authenticated: authenticated),
         body: jsonEncode(body),
       ),
+      authenticated: authenticated,
     );
-    return _decode(response);
   }
 
   Future<void> delete(String path, {bool authenticated = true}) async {
-    final response = await _send(
+    await _request(
+      path,
       () async => _client.delete(
         _uri(path),
         headers: await _headers(authenticated: authenticated),
       ),
+      authenticated: authenticated,
     );
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      _decode(response);
-    }
   }
 
   dynamic _decode(http.Response response) {
