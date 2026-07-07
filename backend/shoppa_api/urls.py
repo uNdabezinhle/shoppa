@@ -12,4 +12,11 @@ urlpatterns = [
     path("v1/", include("apps.lists.urls")),
     path("v1/", include("apps.price_intelligence.urls")),
     path("v1/", include("apps.promotions.urls")),
+    path("v1/", include("apps.regions.urls")),
+    path("v1/", include("apps.delivery.urls")),
+    path("v1/", include("apps.chat.urls")),
+    path("v1/", include("apps.notifications.urls")),
+    path("v1/", include("apps.subscriptions.urls")),
+    path("v1/", include("apps.admin_tools.urls")),
+    path("v1/", include("apps.ads.urls")),
 ]

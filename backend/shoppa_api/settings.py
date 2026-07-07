@@ -38,6 +38,14 @@ INSTALLED_APPS = [
     "apps.lists",
     "apps.price_intelligence",
     "apps.promotions",
+    "apps.regions",
+    "apps.delivery",
+    "apps.chat",
+    "apps.notifications",
+    "apps.subscriptions",
+    "apps.admin_tools",
+    "apps.ads",
+    "django_celery_beat",
 ]
 
 MIDDLEWARE = [
@@ -142,3 +150,24 @@ CORS_ALLOWED_ORIGINS = [
 # specified otherwise at registration (SRS FR-1.4, Architecture §5.1).
 DEFAULT_REGION = "ZA"
 DEFAULT_CURRENCY = "ZAR"
+
+# Celery (Architecture §3): shares REDIS_URL with Channels. Without Redis,
+# tasks execute eagerly so CI and sqlite-only dev never need a broker.
+CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", REDIS_URL or "memory://")
+CELERY_RESULT_BACKEND = os.environ.get(
+    "CELERY_RESULT_BACKEND", REDIS_URL or "cache+memory://"
+)
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_TIMEZONE = TIME_ZONE
+if not REDIS_URL:
+    CELERY_TASK_ALWAYS_EAGER = True
+    CELERY_TASK_EAGER_PROPAGATES = True
+
+# Stripe (Phase 5) — webhook signature secret; empty in dev.
+STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
+
+# Firebase Cloud Messaging (Phase 2+) — server key for push dispatch.
+FCM_SERVER_KEY = os.environ.get("FCM_SERVER_KEY", "")

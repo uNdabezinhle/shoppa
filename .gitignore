@@ -27,3 +27,4 @@ app/pubspec.lock
 .DS_Store
 *.log
 mcps/
+terminals/

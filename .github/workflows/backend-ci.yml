@@ -39,6 +39,12 @@ jobs:
       - name: Django system checks
         run: python manage.py check
 
+      - name: Apply migrations
+        env:
+          SECRET_KEY: ci-test-key
+          DATABASE_URL: sqlite:///test_db.sqlite3
+        run: python manage.py migrate --noinput
+
       - name: Run tests
         env:
           SECRET_KEY: ci-test-key

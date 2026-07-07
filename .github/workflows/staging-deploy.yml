@@ -1,0 +1,42 @@
+name: staging-deploy
+
+# Promotes the backend Docker image to staging after tests pass on main.
+# Configure STAGING_* secrets in the repo before enabling automatic deploy.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "backend/**"
+      - "docker-compose.yml"
+      - ".github/workflows/staging-deploy.yml"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    needs: []
+    if: github.repository != '' # always run when triggered; secrets gate the deploy step
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build backend image
+        run: docker build -t shoppa-backend:staging ./backend
+
+      - name: Deploy to staging
+        if: env.STAGING_DEPLOY_ENABLED == 'true'
+        env:
+          STAGING_DEPLOY_ENABLED: ${{ secrets.STAGING_DEPLOY_ENABLED }}
+        run: |
+          echo "Staging deploy placeholder — push shoppa-backend:staging to your registry"
+          echo "and roll out to the staging environment configured in your cloud provider."
+          # Example (uncomment and set secrets):
+          # echo "${{ secrets.STAGING_REGISTRY_PASSWORD }}" | docker login -u "${{ secrets.STAGING_REGISTRY_USER }}" --password-stdin "${{ secrets.STAGING_REGISTRY }}"
+          # docker tag shoppa-backend:staging "${{ secrets.STAGING_REGISTRY }}/shoppa-backend:${{ github.sha }}"
+          # docker push "${{ secrets.STAGING_REGISTRY }}/shoppa-backend:${{ github.sha }}"
+
+      - name: Staging deploy skipped (secrets not configured)
+        if: env.STAGING_DEPLOY_ENABLED != 'true'
+        env:
+          STAGING_DEPLOY_ENABLED: ${{ secrets.STAGING_DEPLOY_ENABLED }}
+        run: |
+          echo "Set repository secret STAGING_DEPLOY_ENABLED=true to activate staging promotion."
