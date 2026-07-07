@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
 import '../core/lists_repository.dart';
 import '../theme/shoppa_theme.dart';
@@ -191,6 +192,22 @@ class _CompareTabScreenState extends State<CompareTabScreen> {
                               ),
                             ],
                             const SizedBox(height: 16),
+                            if (_selectedListId != null) ...[
+                              const SizedBox(height: 8),
+                              FilledButton.icon(
+                                onPressed: () {
+                                  final title = Uri.encodeComponent(
+                                    selected?.title ?? 'List',
+                                  );
+                                  context.push(
+                                    '/delivery?listId=$_selectedListId&title=$title',
+                                  );
+                                },
+                                icon: const Icon(Icons.local_shipping_outlined),
+                                label: const Text('Compare delivery options'),
+                              ),
+                            ],
+                            const SizedBox(height: 8),
                             ...comparison.stores.map((store) {
                               final isBest =
                                   store.storeId == comparison.bestStoreId;

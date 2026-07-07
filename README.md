@@ -8,25 +8,23 @@ Monorepo for Shoppa: a mobile-first shopping intelligence platform (South Africa
 - `app/` — Flutter application (`shoppa_app`) targeting iOS, Android, and Web.
 - `docker-compose.yml` — local Postgres + Redis + API + Celery stack.
 
-## Status (Milestone 3 — Intelligence, July 2026)
+## Status (Milestone 4 — Delivery, July 2026)
 
 **Released:** `v0.0.3-m3` on `main` (Milestone 3 complete)
 
-**Active branch:** `milestone/m4-delivery` (next)
+**Active branch:** `milestone/m4-delivery` (in progress)
 
-| Area | Done in M3 |
-|------|------------|
-| **Catalogue search** | `GET /v1/products?q=` — region-scoped product search |
-| **Store price lookup** | `GET /v1/products/{id}/store-price?store_id=` for shop-mode prefill |
-| **Catalogue-linked items** | Product picker on add-item; `product_id` sent to API |
-| **Compare depth** | List selector, winner banner, savings vs worst store |
-| **Session summary** | Spend + potential savings from comparison (FR-4.4 / FR-5.3) |
-| **Promotions polish** | Seeded promos; Mall chip + Profile link to `/promotions` |
-| **Price-drop feed** | `GET /v1/notifications`, mark-read; Mall + Profile links (TC-5.5) |
-| **Scraper skeleton** | Celery `scrape_catalogue_prices` re-ingests launch catalogue |
-| **M3 smoke** | `python scripts/m3_smoke.py` validates savings, promos, notifications |
+| Area | Done in M4 (so far) |
+|------|---------------------|
+| **Adapter layer** | Common interface + four launch adapters (Checkers 60/60, PnP ASAP, SPAR 2U, Woolies Dash) |
+| **Delivery quotes** | `GET /v1/lists/{id}/delivery-quotes` — ETA, fee, stock, affiliate URL |
+| **Feature flags** | `DELIVERY_PLATFORMS_BY_REGION` toggles platforms per region |
+| **Delivery screen** | Compare tab CTA → `/delivery` with cheapest badge and order hand-off |
+| **M4 smoke** | `python scripts/m4_smoke.py` validates quotes + affiliate tracking |
 
-**Prior (M2 — `v0.0.2-m2`):** presence, chat, collaborator avatars, WS reconnect.
+**Prior (M3 — `v0.0.3-m3`):** catalogue search, compare depth, promos, price-drop notifications.
+
+**Remaining for M4 gate:** live delivery WS channel, promotion badges in list views (FR-7.2), tag `v0.0.4-m4`.
 
 ## Git branching
 
@@ -97,6 +95,15 @@ cd backend
 python manage.py seed_launch_data
 python scripts/m3_smoke.py
 # In the app: add "Full Cream Milk 2L" from catalogue → Compare tab shows store savings
+```
+
+### M4 demo flow
+
+```bash
+cd backend
+python manage.py seed_launch_data
+python scripts/m4_smoke.py
+# In the app: catalogue-linked list → Compare → "Compare delivery options"
 ```
 
 ## Conventions

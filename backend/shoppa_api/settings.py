@@ -158,6 +158,16 @@ CORS_ALLOWED_ORIGINS = [
 DEFAULT_REGION = "ZA"
 DEFAULT_CURRENCY = "ZAR"
 
+# Delivery platforms enabled per region (Architecture §7, FR-6.4).
+DELIVERY_PLATFORMS_BY_REGION = {
+    "ZA": [
+        "checkers_6060",
+        "pnp_asap",
+        "spar_2u",
+        "woolies_dash",
+    ],
+}
+
 # Celery (Architecture §3): shares REDIS_URL with Channels. Without Redis,
 # tasks execute eagerly so CI and sqlite-only dev never need a broker.
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", REDIS_URL or "memory://")

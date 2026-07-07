@@ -5,6 +5,7 @@ import 'app_deps.dart';
 import 'auth_state.dart';
 import '../screens/app_shell.dart';
 import '../screens/compare_tab_screen.dart';
+import '../screens/delivery_screen.dart';
 import '../screens/list_screen.dart';
 import '../screens/login_screen.dart';
 import '../screens/mall_tab_screen.dart';
@@ -90,6 +91,18 @@ GoRouter createAppRouter(AppDeps deps) {
         builder: (context, state) => NotificationsScreen(
           notificationsRepository: deps.notificationsRepository,
         ),
+      ),
+      GoRoute(
+        path: '/delivery',
+        builder: (context, state) {
+          final listId = state.uri.queryParameters['listId'] ?? '';
+          final title = state.uri.queryParameters['title'] ?? 'List';
+          return DeliveryScreen(
+            deliveryRepository: deps.deliveryRepository,
+            listId: listId,
+            listTitle: title,
+          );
+        },
       ),
       GoRoute(
         path: '/lists/:listId',

@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'core/api_client.dart';
 import 'core/app_deps.dart';
 import 'core/catalogue_repository.dart';
+import 'core/delivery_repository.dart';
 import 'core/app_router.dart';
 import 'core/auth_repository.dart';
 import 'core/auth_state.dart';
@@ -45,6 +46,7 @@ void main() {
   final apiClient = ApiClient(baseUrl: _apiBaseUrl, tokenStore: tokenStore);
   final authRepository = AuthRepository(apiClient);
   final catalogueRepository = CatalogueRepository(apiClient);
+  final deliveryRepository = DeliveryRepository(apiClient);
   final listsRepository = ListsRepository(
     apiClient,
     offlineStore: SharedPreferencesOfflineStore(),
@@ -63,6 +65,7 @@ void main() {
   final deps = AppDeps(
     authRepository: authRepository,
     catalogueRepository: catalogueRepository,
+    deliveryRepository: deliveryRepository,
     listsRepository: listsRepository,
     notificationsRepository: notificationsRepository,
     realtimeClient: realtimeClient,

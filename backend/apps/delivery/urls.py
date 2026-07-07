@@ -1,2 +1,11 @@
-"""Delivery adapters land in Phase 4 (GET /lists/{id}/delivery-quotes)."""
-urlpatterns = []
+from django.urls import path
+
+from .views import ListDeliveryQuotesView
+
+urlpatterns = [
+    path(
+        "lists/<uuid:list_id>/delivery-quotes",
+        ListDeliveryQuotesView.as_view(),
+        name="list-delivery-quotes",
+    ),
+]
