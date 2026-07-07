@@ -1,0 +1,144 @@
+"""
+Django settings for shoppa_api.
+
+Conventions follow the Shoppa API Specification: versioned API at /v1,
+JSON everywhere, UUID resource IDs, money as integer minor units + currency
+code, region-scoped data (Solution Architecture §2, §5.1).
+"""
+import os
+from datetime import timedelta
+from pathlib import Path
+
+import dj_database_url
+from dotenv import load_dotenv
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
+
+SECRET_KEY = os.environ.get("SECRET_KEY", "insecure-dev-key-change-me")
+DEBUG = os.environ.get("DEBUG", "True") == "True"
+ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
+
+INSTALLED_APPS = [
+    # "daphne" first so `manage.py runserver` uses Channels' ASGI dev
+    # server (which serves WebSockets too) instead of plain WSGI --
+    # matches how the app actually runs in production (asgi.py + Daphne).
+    "daphne",
+    "django.contrib.admin",
+    "django.contrib.auth",
+    "django.contrib.contenttypes",
+    "django.contrib.sessions",
+    "django.contrib.messages",
+    "django.contrib.staticfiles",
+    "rest_framework",
+    "rest_framework_simplejwt",
+    "corsheaders",
+    "channels",
+    "apps.users",
+    "apps.lists",
+    "apps.price_intelligence",
+    "apps.promotions",
+]
+
+MIDDLEWARE = [
+    "django.middleware.security.SecurityMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.middleware.common.CommonMiddleware",
+    "django.middleware.csrf.CsrfViewMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
+]
+
+ROOT_URLCONF = "shoppa_api.urls"
+
+TEMPLATES = [
+    {
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "DIRS": [],
+        "APP_DIRS": True,
+        "OPTIONS": {
+            "context_processors": [
+                "django.template.context_processors.debug",
+                "django.template.context_processors.request",
+                "django.contrib.auth.context_processors.auth",
+                "django.contrib.messages.context_processors.messages",
+            ],
+        },
+    },
+]
+
+WSGI_APPLICATION = "shoppa_api.wsgi.application"
+ASGI_APPLICATION = "shoppa_api.asgi.application"
+
+# SRS FR-3.2 / Architecture §8: Django Channels for real-time list
+# collaboration. REDIS_URL (also used for Celery in later phases) selects
+# the production channel layer; falling back to the in-memory layer keeps
+# local dev and CI working without a Redis instance, same fallback
+# pattern as DATABASE_URL -> sqlite above.
+REDIS_URL = os.environ.get("REDIS_URL")
+if REDIS_URL:
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {"hosts": [REDIS_URL]},
+        }
+    }
+else:
+    CHANNEL_LAYERS = {
+        "default": {"BACKEND": "channels.layers.InMemoryChannelLayer"},
+    }
+
+DATABASES = {
+    "default": dj_database_url.config(
+        env="DATABASE_URL",
+        default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}",
+    )
+}
+
+AUTH_USER_MODEL = "users.User"
+
+AUTH_PASSWORD_VALIDATORS = [
+    {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
+    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
+    {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
+    {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
+]
+
+LANGUAGE_CODE = "en-us"
+TIME_ZONE = "UTC"
+USE_I18N = True
+USE_TZ = True
+
+STATIC_URL = "static/"
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": (
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
+    ),
+    "DEFAULT_PERMISSION_CLASSES": (
+        "rest_framework.permissions.IsAuthenticated",
+    ),
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.CursorPagination",
+    "PAGE_SIZE": 20,
+    "EXCEPTION_HANDLER": "shoppa_api.exceptions.shoppa_exception_handler",
+}
+
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=14),
+    "ROTATE_REFRESH_TOKENS": True,
+}
+
+CORS_ALLOWED_ORIGINS = [
+    origin
+    for origin in os.environ.get("CORS_ALLOWED_ORIGINS", "").split(",")
+    if origin
+]
+
+# Shoppa is South-Africa-first; new users default to this region unless
+# specified otherwise at registration (SRS FR-1.4, Architecture §5.1).
+DEFAULT_REGION = "ZA"
+DEFAULT_CURRENCY = "ZAR"
