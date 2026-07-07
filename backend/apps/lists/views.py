@@ -73,6 +73,12 @@ class ListListView(generics.ListCreateAPIView):
             .prefetch_related("collaborators__user")
         )
 
+    def create(self, request, *args, **kwargs):
+        from apps.subscriptions.services import assert_can_create_list
+
+        assert_can_create_list(request.user)
+        return super().create(request, *args, **kwargs)
+
     def perform_create(self, serializer):
         serializer.save(owner=self.request.user)
 

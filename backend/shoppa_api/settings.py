@@ -185,6 +185,12 @@ if not REDIS_URL:
 # Stripe (Phase 5) — webhook signature secret; empty in dev.
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
+STRIPE_CHECKOUT_SUCCESS_URL = os.environ.get(
+    "STRIPE_CHECKOUT_SUCCESS_URL", "https://app.shoppa.app/subscription/success"
+)
+STRIPE_CHECKOUT_CANCEL_URL = os.environ.get(
+    "STRIPE_CHECKOUT_CANCEL_URL", "https://app.shoppa.app/subscription/cancel"
+)
 
 # Firebase Cloud Messaging (Phase 2+) — server key for push dispatch.
 FCM_SERVER_KEY = os.environ.get("FCM_SERVER_KEY", "")

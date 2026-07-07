@@ -91,6 +91,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ListTile(
             tileColor: ShoppaColors.panel,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            leading: const Icon(Icons.workspace_premium_outlined, color: ShoppaColors.amber),
+            title: const Text('Plans & Billing', style: TextStyle(color: ShoppaColors.ink)),
+            subtitle: const Text(
+              'Subscriptions and upgrades',
+              style: TextStyle(color: ShoppaColors.mist, fontSize: 12),
+            ),
+            trailing: const Icon(Icons.chevron_right, color: ShoppaColors.mist),
+            onTap: () => context.push('/subscriptions'),
+          ),
+          const SizedBox(height: 12),
+          ListTile(
+            tileColor: ShoppaColors.panel,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             leading: const Icon(Icons.notifications_outlined, color: ShoppaColors.amber),
             title: const Text('Notifications', style: TextStyle(color: ShoppaColors.ink)),
             subtitle: Text(

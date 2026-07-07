@@ -11,8 +11,10 @@ import '../screens/login_screen.dart';
 import '../screens/mall_tab_screen.dart';
 import '../screens/notifications_screen.dart';
 import '../screens/my_lists_tab_screen.dart';
+import '../screens/discover_lists_screen.dart';
 import '../screens/profile_screen.dart';
 import '../screens/promotions_screen.dart';
+import '../screens/subscription_screen.dart';
 import '../screens/register_screen.dart';
 
 GoRouter createAppRouter(AppDeps deps) {
@@ -93,6 +95,18 @@ GoRouter createAppRouter(AppDeps deps) {
         ),
       ),
       GoRoute(
+        path: '/subscriptions',
+        builder: (context, state) => SubscriptionScreen(
+          subscriptionsRepository: deps.subscriptionsRepository,
+        ),
+      ),
+      GoRoute(
+        path: '/discover-lists',
+        builder: (context, state) => DiscoverListsScreen(
+          listsRepository: deps.listsRepository,
+        ),
+      ),
+      GoRoute(
         path: '/delivery',
         builder: (context, state) {
           final listId = state.uri.queryParameters['listId'] ?? '';
@@ -116,6 +130,7 @@ GoRouter createAppRouter(AppDeps deps) {
             realtimeClient: deps.realtimeClient,
             chatClient: deps.chatClient,
             currentUserEmail: deps.authState.user?.email,
+            accountType: deps.authState.user?.accountType ?? 'personal',
             listId: listId,
             title: title,
           );

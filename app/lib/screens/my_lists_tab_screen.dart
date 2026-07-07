@@ -79,7 +79,16 @@ class _MyListsTabScreenState extends State<MyListsTabScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('My Lists')),
+      appBar: AppBar(
+        title: const Text('My Lists'),
+        actions: [
+          IconButton(
+            tooltip: 'Discover public lists',
+            icon: const Icon(Icons.public_outlined),
+            onPressed: () => context.push('/discover-lists'),
+          ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton(
         onPressed: _createList,
         child: const Icon(Icons.add),

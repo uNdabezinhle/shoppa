@@ -96,6 +96,9 @@ class ShoppaList {
     required this.category,
     required this.isRecurring,
     required this.itemCount,
+    this.isPublic = false,
+    this.eventName = '',
+    this.eventDate,
     this.role,
     this.collaborators = const [],
     this.items,
@@ -109,6 +112,9 @@ class ShoppaList {
         category: json['category'] as String,
         isRecurring: json['is_recurring'] as bool? ?? false,
         itemCount: json['item_count'] as int? ?? 0,
+        isPublic: json['is_public'] as bool? ?? false,
+        eventName: json['event_name'] as String? ?? '',
+        eventDate: json['event_date'] as String?,
         role: json['role'] as String?,
         collaborators: (json['collaborators'] as List? ?? [])
             .map((e) =>
@@ -127,6 +133,9 @@ class ShoppaList {
   final String category;
   final bool isRecurring;
   final int itemCount;
+  final bool isPublic;
+  final String eventName;
+  final String? eventDate;
   final List<ShoppaCollaboratorPreview> collaborators;
   /// "owner", "edit", or "view" (API Specification role field, SRS
   /// FR-3.1) -- null only if the server response omitted it.
@@ -386,13 +395,48 @@ class ListsRepository {
     String? title,
     String? category,
     bool? isRecurring,
+    bool? isPublic,
+    String? eventName,
+    String? eventDate,
   }) async {
     final body = <String, dynamic>{};
     if (title != null) body['title'] = title;
     if (category != null) body['category'] = category;
     if (isRecurring != null) body['is_recurring'] = isRecurring;
+    if (isPublic != null) body['is_public'] = isPublic;
+    if (eventName != null) body['event_name'] = eventName;
+    if (eventDate != null) body['event_date'] = eventDate;
     final json =
         await _client.patch('/lists/$listId', body) as Map<String, dynamic>;
+    return ShoppaList.fromJson(json);
+  }
+
+  /// FR-8.1: scale all item quantities by guest count or factor.
+  Future<ShoppaList> scaleList(
+    String listId, {
+    int? guests,
+    num? factor,
+  }) async {
+    final body = <String, dynamic>{};
+    if (guests != null) body['guests'] = guests;
+    if (factor != null) body['factor'] = factor;
+    final json = await _client.post('/lists/$listId/scale', body)
+        as Map<String, dynamic>;
+    return ShoppaList.fromJson(json);
+  }
+
+  /// FR-8.2: published lists from other users.
+  Future<List<ShoppaList>> fetchPublicLists() async {
+    final json = await _client.get('/lists/public') as Map<String, dynamic>;
+    return (json['results'] as List)
+        .map((e) => ShoppaList.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// FR-8.2: clone a list the caller can access (including public).
+  Future<ShoppaList> duplicateList(String listId) async {
+    final json = await _client.post('/lists/$listId/duplicate', {})
+        as Map<String, dynamic>;
     return ShoppaList.fromJson(json);
   }
 

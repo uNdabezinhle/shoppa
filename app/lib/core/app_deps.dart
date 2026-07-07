@@ -7,6 +7,7 @@ import 'list_chat_client.dart';
 import 'list_realtime_client.dart';
 import 'lists_repository.dart';
 import 'notifications_repository.dart';
+import 'subscriptions_repository.dart';
 
 /// Shared dependencies wired once in [main] and passed into the router.
 class AppDeps {
@@ -17,6 +18,7 @@ class AppDeps {
     required this.deliveryRealtimeClient,
     required this.listsRepository,
     required this.notificationsRepository,
+    required this.subscriptionsRepository,
     required this.realtimeClient,
     required this.chatClient,
     required this.authState,
@@ -28,6 +30,7 @@ class AppDeps {
   final DeliveryRealtimeClient deliveryRealtimeClient;
   final ListsRepository listsRepository;
   final NotificationsRepository notificationsRepository;
+  final SubscriptionsRepository subscriptionsRepository;
   final ListRealtimeClient realtimeClient;
   final ListChatClient chatClient;
   final AuthState authState;

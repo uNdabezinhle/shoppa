@@ -148,6 +148,30 @@ class _MallTabScreenState extends State<MallTabScreen> {
                       onTap: () => context.push('/promotions'),
                     ),
                   ],
+                  if (widget.user.accountType == 'personal') ...[
+                    const SizedBox(height: 16),
+                    ListTile(
+                      tileColor: ShoppaColors.panel,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        side: BorderSide(color: ShoppaColors.amber.withOpacity(0.3)),
+                      ),
+                      leading: const Icon(Icons.restaurant_menu, color: ShoppaColors.amber),
+                      title: const Text(
+                        'Cooking for a crowd?',
+                        style: TextStyle(
+                          color: ShoppaColors.ink,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      subtitle: const Text(
+                        'Scale any list by guests with Shoppa Pro',
+                        style: TextStyle(color: ShoppaColors.mist, fontSize: 12),
+                      ),
+                      trailing: const Icon(Icons.chevron_right, color: ShoppaColors.mist),
+                      onTap: () => context.push('/subscriptions'),
+                    ),
+                  ],
                   const SizedBox(height: 20),
                   const Text(
                     'Recent Lists',

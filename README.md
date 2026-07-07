@@ -8,22 +8,25 @@ Monorepo for Shoppa: a mobile-first shopping intelligence platform (South Africa
 - `app/` — Flutter application (`shoppa_app`) targeting iOS, Android, and Web.
 - `docker-compose.yml` — local Postgres + Redis + API + Celery stack.
 
-## Status (Milestone 4 — Delivery, July 2026)
+## Status (Milestone 5 — Subscriptions & Professional, July 2026)
 
 **Released:** `v0.0.4-m4` on `main` (Milestone 4 complete)
 
-**Active branch:** `milestone/m5-subscriptions` (next)
+**Active branch:** `milestone/m5-subscriptions` (in progress)
 
-| Area | Done in M4 |
-|------|------------|
-| **Adapter layer** | Common interface + four launch adapters (Checkers 60/60, PnP ASAP, SPAR 2U, Woolies Dash) |
-| **Delivery quotes** | `GET /v1/lists/{id}/delivery-quotes` — ETA, fee, stock, affiliate URL |
-| **Live delivery WS** | `ws/lists/{id}/delivery` — `quote.updated`, `availability.changed` |
-| **Promotion badges** | `has_promotion` on list items with non-intrusive PROMO chip (FR-7.2) |
-| **Delivery screen** | Compare tab CTA → `/delivery` with live quote refresh |
-| **M4 smoke** | `python scripts/m4_smoke.py` validates quotes + affiliate tracking |
+| Area | Done in M5 (so far) |
+|------|---------------------|
+| **Subscription plans** | `GET /v1/subscriptions/plans`, `GET /v1/subscriptions/me` with feature flags |
+| **Stripe checkout** | `POST /v1/subscriptions/checkout` (dev-mode fallback without Stripe keys) |
+| **Webhook reconcile** | `POST /v1/webhooks/stripe` activates plan on `checkout.session.completed` |
+| **Free-tier limits** | Max 3 owned lists enforced on `POST /lists` (FR-9.3) |
+| **Professional mobile** | Scale-for-guests, publish toggle, discover/clone public lists |
+| **Pro upsell** | Mall “Cooking for a crowd?” card + Profile → `/subscriptions` |
+| **M5 smoke** | `python scripts/m5_smoke.py` validates plans, limits, checkout + webhook |
 
-**Prior (M3 — `v0.0.3-m3`):** catalogue search, compare depth, promos, price-drop notifications.
+**Prior (M4 — `v0.0.4-m4`):** delivery adapters, live quote WS, promo badges.
+
+**Remaining for M5 gate:** admin console, export UI, full Stripe verification (TC-9.4), tag `v0.0.5-m5`.
 
 ## Git branching
 
@@ -104,6 +107,15 @@ cd backend
 python manage.py seed_launch_data
 python scripts/m4_smoke.py
 # In the app: catalogue-linked list → Compare → "Compare delivery options"
+```
+
+### M5 demo flow
+
+```bash
+cd backend
+python manage.py migrate
+python scripts/m5_smoke.py
+# In the app: Profile → Plans & Billing; Professional list → scale / publish
 ```
 
 ## Conventions

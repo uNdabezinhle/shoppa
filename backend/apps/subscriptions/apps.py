@@ -6,3 +6,6 @@ class SubscriptionsConfig(AppConfig):
     name = "apps.subscriptions"
     label = "subscriptions"
     verbose_name = "Subscriptions"
+
+    def ready(self):
+        from . import signals  # noqa: F401

@@ -12,6 +12,7 @@ import '../theme/shoppa_theme.dart';
 import '../widgets/item_form_dialog.dart';
 import '../widgets/presence_banner.dart';
 import '../widgets/product_picker_sheet.dart';
+import '../widgets/scale_guests_sheet.dart';
 
 /// Item check-off view (SRS FR-2.2, FR-4.1) with a price-capture prompt
 /// on check-off (FR-4.3) and a session summary on completion (FR-4.4),
@@ -27,6 +28,7 @@ class ListScreen extends StatefulWidget {
     required this.realtimeClient,
     required this.chatClient,
     this.currentUserEmail,
+    this.accountType = 'personal',
     required this.listId,
     required this.title,
   });
@@ -36,6 +38,7 @@ class ListScreen extends StatefulWidget {
   final ListRealtimeClient realtimeClient;
   final ListChatClient chatClient;
   final String? currentUserEmail;
+  final String accountType;
   final String listId;
   final String title;
 
@@ -448,6 +451,53 @@ class _ListScreenState extends State<ListScreen> {
     );
   }
 
+  bool get _isProfessional => widget.accountType == 'professional';
+
+  Future<void> _scaleForGuests() async {
+    final guests = await showScaleGuestsSheet(context);
+    if (guests == null) return;
+    try {
+      await widget.listsRepository.scaleList(widget.listId, guests: guests);
+      _reload();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Scaled list for $guests guests'),
+            backgroundColor: ShoppaColors.panel2,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not scale list: $e'),
+            backgroundColor: ShoppaColors.rose,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _togglePublish(ShoppaList list) async {
+    try {
+      await widget.listsRepository.updateList(
+        list.id,
+        isPublic: !list.isPublic,
+      );
+      _reload();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not update publish setting: $e'),
+            backgroundColor: ShoppaColors.rose,
+          ),
+        );
+      }
+    }
+  }
+
   Future<void> _openShareSheet(ShoppaList list) async {
     await showModalBottomSheet(
       context: context,
@@ -625,6 +675,35 @@ class _ListScreenState extends State<ListScreen> {
               );
             },
           ),
+          if (_isProfessional)
+            FutureBuilder<ShoppaList>(
+              future: _list,
+              builder: (context, snapshot) {
+                final list = snapshot.data;
+                if (list == null || !list.isOwner) {
+                  return const SizedBox.shrink();
+                }
+                return PopupMenuButton<String>(
+                  tooltip: 'Professional tools',
+                  onSelected: (value) {
+                    if (value == 'scale') _scaleForGuests();
+                    if (value == 'publish') _togglePublish(list);
+                  },
+                  itemBuilder: (context) => [
+                    const PopupMenuItem(
+                      value: 'scale',
+                      child: Text('Scale for guests'),
+                    ),
+                    PopupMenuItem(
+                      value: 'publish',
+                      child: Text(
+                        list.isPublic ? 'Unpublish list' : 'Publish publicly',
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
         ],
       ),
       body: FutureBuilder<ShoppaList>(
