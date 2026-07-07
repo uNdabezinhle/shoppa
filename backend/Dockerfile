@@ -15,12 +15,15 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
+RUN chmod +x /app/docker-entrypoint.sh
 
-RUN adduser --disabled-password --no-create-home shoppa
+RUN adduser --disabled-password --no-create-home shoppa \
+    && chown -R shoppa:shoppa /app
 USER shoppa
 
 EXPOSE 8000
 # Daphne (not gunicorn+WSGI) so the same process serves both the REST API
 # and the ws /lists/{id} real-time channel (Architecture AD-3: Django
 # Channels for real-time). See shoppa_api/asgi.py for the ProtocolTypeRouter.
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["daphne", "-b", "0.0.0.0", "-p", "8000", "shoppa_api.asgi:application"]

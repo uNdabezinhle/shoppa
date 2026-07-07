@@ -6,7 +6,10 @@ relative to /v1, matching the API Specification's versioning convention.
 from django.contrib import admin
 from django.urls import include, path
 
+from .health import health_check
+
 urlpatterns = [
+    path("v1/health/", health_check, name="health"),
     path("admin/", admin.site.urls),
     path("v1/", include("apps.users.urls")),
     path("v1/", include("apps.lists.urls")),

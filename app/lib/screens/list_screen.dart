@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../core/ads_repository.dart';
 import '../core/api_client.dart';
 import '../core/catalogue_repository.dart';
 import '../core/list_chat_client.dart';
@@ -10,6 +11,9 @@ import '../core/list_realtime_client.dart';
 import '../core/lists_repository.dart';
 import '../core/session_summary.dart';
 import '../theme/shoppa_theme.dart';
+import '../widgets/ad_banner.dart';
+import '../widgets/ad_interstitial_sheet.dart';
+import '../widgets/ad_native_tile.dart';
 import '../widgets/item_form_dialog.dart';
 import '../widgets/presence_banner.dart';
 import '../widgets/product_picker_sheet.dart';
@@ -24,6 +28,7 @@ import '../widgets/scale_guests_sheet.dart';
 class ListScreen extends StatefulWidget {
   const ListScreen({
     super.key,
+    required this.adsRepository,
     required this.listsRepository,
     required this.catalogueRepository,
     required this.realtimeClient,
@@ -34,6 +39,7 @@ class ListScreen extends StatefulWidget {
     required this.title,
   });
 
+  final AdsRepository adsRepository;
   final ListsRepository listsRepository;
   final CatalogueRepository catalogueRepository;
   final ListRealtimeClient realtimeClient;
@@ -49,6 +55,8 @@ class ListScreen extends StatefulWidget {
 
 class _ListScreenState extends State<ListScreen> {
   late Future<ShoppaList> _list;
+  late final String _adSessionKey;
+  late final Future<AdPlacement?> _listBanner;
   StreamSubscription<ListRealtimeEvent>? _realtimeSubscription;
   StreamSubscription<RealtimeConnectionState>? _connectionSubscription;
   Timer? _reloadDebounce;
@@ -66,6 +74,8 @@ class _ListScreenState extends State<ListScreen> {
   @override
   void initState() {
     super.initState();
+    _adSessionKey = '${widget.listId}-${DateTime.now().microsecondsSinceEpoch}';
+    _listBanner = _loadListBanner();
     _list = _loadAndSync();
     _list.then((_) => _refreshPendingCount(), onError: (_) {});
     // SRS FR-3.2: any item/collaborator change from another collaborator
@@ -454,6 +464,18 @@ class _ListScreenState extends State<ListScreen> {
 
   bool get _isProfessional => widget.accountType == 'professional';
 
+  Future<AdPlacement?> _loadListBanner() async {
+    try {
+      final ads = await widget.adsRepository.fetchPlacements(
+        surface: 'list',
+        adFormat: 'banner',
+      );
+      return ads.placements.isEmpty ? null : ads.placements.first;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> _exportList(String type) async {
     try {
       final result = await widget.listsRepository.exportList(
@@ -581,6 +603,7 @@ class _ListScreenState extends State<ListScreen> {
       context: context,
       isScrollControlled: true,
       builder: (context) => _ComparisonSheet(
+        adsRepository: widget.adsRepository,
         listsRepository: widget.listsRepository,
         listId: widget.listId,
       ),
@@ -606,6 +629,24 @@ class _ListScreenState extends State<ListScreen> {
   /// exists, savings) on completion. Computed purely from the
   /// already-loaded list -- no extra request, so it works offline too.
   Future<void> _openSessionSummary(ShoppaList list) async {
+    try {
+      final checkoutAds = await widget.adsRepository.fetchPlacements(
+        surface: 'checkout',
+        sessionKey: _adSessionKey,
+      );
+      for (final placement in checkoutAds.placements) {
+        if (!mounted) return;
+        if (placement.isInterstitial || placement.isRewarded) {
+          await showAdInterstitialSheet(
+            context,
+            placement: placement,
+            adsRepository: widget.adsRepository,
+            sessionKey: _adSessionKey,
+          );
+        }
+      }
+    } catch (_) {}
+
     ShoppaComparison? comparison;
     try {
       comparison = await widget.listsRepository.fetchComparison(widget.listId);
@@ -792,6 +833,20 @@ class _ListScreenState extends State<ListScreen> {
                       : 'Shared with you — view only.',
                   color: ShoppaColors.mist,
                 ),
+              FutureBuilder<AdPlacement?>(
+                future: _listBanner,
+                builder: (context, adSnapshot) {
+                  final banner = adSnapshot.data;
+                  if (banner == null) return const SizedBox.shrink();
+                  return Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                    child: AdBanner(
+                      placement: banner,
+                      adsRepository: widget.adsRepository,
+                    ),
+                  );
+                },
+              ),
               if (_shoppingAtStoreName != null)
                 Container(
                   width: double.infinity,
@@ -1356,14 +1411,32 @@ class _ChatSheetState extends State<_ChatSheet> {
 /// store returns it to the caller (see ListScreen._openComparisonSheet),
 /// which uses that to tag subsequent check-offs (FR-5.4).
 class _ComparisonSheet extends StatelessWidget {
-  const _ComparisonSheet({required this.listsRepository, required this.listId});
+  const _ComparisonSheet({
+    required this.adsRepository,
+    required this.listsRepository,
+    required this.listId,
+  });
 
+  final AdsRepository adsRepository;
   final ListsRepository listsRepository;
   final String listId;
 
   String _formatMoney(int minorUnits, String currencyCode) {
     final symbol = currencyCode == 'ZAR' ? 'R' : '$currencyCode ';
     return '$symbol${(minorUnits / 100).toStringAsFixed(2)}';
+  }
+
+  Future<(_ComparisonPayload)> _loadComparisonPayload() async {
+    final comparison = await listsRepository.fetchComparison(listId);
+    AdPlacement? nativeAd;
+    try {
+      final ads = await adsRepository.fetchPlacements(
+        surface: 'list',
+        adFormat: 'native',
+      );
+      if (ads.placements.isNotEmpty) nativeAd = ads.placements.first;
+    } catch (_) {}
+    return (comparison: comparison, nativeAd: nativeAd);
   }
 
   @override
@@ -1390,8 +1463,8 @@ class _ComparisonSheet extends StatelessWidget {
           const SizedBox(height: 12),
           ConstrainedBox(
             constraints: const BoxConstraints(maxHeight: 400),
-            child: FutureBuilder<ShoppaComparison>(
-              future: listsRepository.fetchComparison(listId),
+            child: FutureBuilder<(_ComparisonPayload)>(
+              future: _loadComparisonPayload(),
               builder: (context, snapshot) {
                 if (snapshot.connectionState != ConnectionState.done) {
                   return const Padding(
@@ -1405,7 +1478,9 @@ class _ComparisonSheet extends StatelessWidget {
                     style: const TextStyle(color: ShoppaColors.rose),
                   );
                 }
-                final comparison = snapshot.data!;
+                final payload = snapshot.data!;
+                final comparison = payload.comparison;
+                final nativeAd = payload.nativeAd;
                 if (comparison.isEmpty) {
                   return const Text(
                     'Not enough priced items on this list yet to compare '
@@ -1413,12 +1488,22 @@ class _ComparisonSheet extends StatelessWidget {
                     style: TextStyle(color: ShoppaColors.mist),
                   );
                 }
+                final itemCount =
+                    comparison.stores.length + (nativeAd != null ? 1 : 0);
                 return ListView.separated(
                   shrinkWrap: true,
-                  itemCount: comparison.stores.length,
+                  itemCount: itemCount,
                   separatorBuilder: (_, __) => const Divider(height: 16),
                   itemBuilder: (context, index) {
-                    final store = comparison.stores[index];
+                    if (nativeAd != null && index == 1) {
+                      return AdNativeTile(
+                        placement: nativeAd,
+                        adsRepository: adsRepository,
+                      );
+                    }
+                    var storeIndex = index;
+                    if (nativeAd != null && index > 1) storeIndex -= 1;
+                    final store = comparison.stores[storeIndex];
                     final isBest = store.storeId == comparison.bestStoreId;
                     return ListTile(
                       contentPadding: EdgeInsets.zero,
@@ -1472,3 +1557,5 @@ class _InfoBanner extends StatelessWidget {
     );
   }
 }
+
+typedef _ComparisonPayload = ({ShoppaComparison comparison, AdPlacement? nativeAd});

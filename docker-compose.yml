@@ -1,7 +1,11 @@
-# Local staging stack for Sprint 0+ development.
-# Usage: docker compose up -d redis postgres
-#        cd backend && python manage.py migrate && python manage.py seed_launch_data
-#        celery -A shoppa_api worker -l info   (separate terminal)
+# Full local stack — Postgres, Redis, API (Daphne), Celery worker + beat.
+#
+# Quick start:
+#   docker compose up -d --build
+#   curl http://localhost:8000/v1/health/
+#
+# Flutter (Android emulator):
+#   flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8000/v1
 services:
   postgres:
     image: postgres:16-alpine
@@ -13,11 +17,21 @@ services:
       - "5432:5432"
     volumes:
       - shoppa_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shoppa -d shoppa"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   api:
     build: ./backend
@@ -28,10 +42,19 @@ services:
       SECRET_KEY: dev-compose-key
       DATABASE_URL: postgres://shoppa:shoppa@postgres:5432/shoppa
       REDIS_URL: redis://redis:6379/0
-      ALLOWED_HOSTS: localhost,127.0.0.1,api
+      ALLOWED_HOSTS: localhost,127.0.0.1,api,testserver
+      SEED_LAUNCH_DATA: "true"
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/v1/health/')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
 
   celery-worker:
     build: ./backend
@@ -40,9 +63,10 @@ services:
       SECRET_KEY: dev-compose-key
       DATABASE_URL: postgres://shoppa:shoppa@postgres:5432/shoppa
       REDIS_URL: redis://redis:6379/0
+      SEED_LAUNCH_DATA: "false"
     depends_on:
-      - postgres
-      - redis
+      api:
+        condition: service_healthy
 
   celery-beat:
     build: ./backend
@@ -51,9 +75,10 @@ services:
       SECRET_KEY: dev-compose-key
       DATABASE_URL: postgres://shoppa:shoppa@postgres:5432/shoppa
       REDIS_URL: redis://redis:6379/0
+      SEED_LAUNCH_DATA: "false"
     depends_on:
-      - postgres
-      - redis
+      api:
+        condition: service_healthy
 
 volumes:
   shoppa_pgdata:

@@ -55,6 +55,7 @@ GoRouter createAppRouter(AppDeps deps) {
             path: '/home',
             builder: (context, state) => MallTabScreen(
               authRepository: deps.authRepository,
+              adsRepository: deps.adsRepository,
               listsRepository: deps.listsRepository,
               notificationsRepository: deps.notificationsRepository,
               user: deps.authState.user!,
@@ -132,6 +133,7 @@ GoRouter createAppRouter(AppDeps deps) {
           final listId = state.pathParameters['listId']!;
           final title = state.uri.queryParameters['title'] ?? 'List';
           return ListScreen(
+            adsRepository: deps.adsRepository,
             listsRepository: deps.listsRepository,
             catalogueRepository: deps.catalogueRepository,
             realtimeClient: deps.realtimeClient,

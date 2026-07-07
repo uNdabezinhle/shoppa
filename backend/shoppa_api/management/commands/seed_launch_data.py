@@ -9,6 +9,7 @@ from decimal import Decimal
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
+from apps.ads.services import ensure_house_ads_seeded
 from apps.lists.models import ListCategory
 from apps.price_intelligence.models import PriceSource, Product, Store
 from apps.price_intelligence.services import record_observation
@@ -139,5 +140,8 @@ class Command(BaseCommand):
             self.stdout.write(
                 f"  Promotion {promo['title']} {'created' if created else 'updated'}"
             )
+
+        ensure_house_ads_seeded()
+        self.stdout.write("  House ad placements seeded")
 
         self.stdout.write(self.style.SUCCESS("Launch seed data complete."))

@@ -1,22 +1,26 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../core/ads_repository.dart';
 import '../core/auth_repository.dart';
 import '../core/lists_repository.dart';
 import '../core/notifications_repository.dart';
 import '../theme/shoppa_theme.dart';
+import '../widgets/ad_banner.dart';
 
 /// Mall tab — greeting, savings hero, quick list preview (Phase 1 M1).
 class MallTabScreen extends StatefulWidget {
   const MallTabScreen({
     super.key,
     required this.authRepository,
+    required this.adsRepository,
     required this.listsRepository,
     required this.notificationsRepository,
     required this.user,
   });
 
   final AuthRepository authRepository;
+  final AdsRepository adsRepository;
   final ListsRepository listsRepository;
   final NotificationsRepository notificationsRepository;
   final ShoppaUser user;
@@ -36,6 +40,14 @@ class _MallTabScreenState extends State<MallTabScreen> {
 
   Future<_MallData> _load() async {
     final lists = await widget.listsRepository.fetchLists();
+    AdPlacement? homeBanner;
+    try {
+      final ads = await widget.adsRepository.fetchPlacements(
+        surface: 'home',
+        adFormat: 'banner',
+      );
+      if (ads.placements.isNotEmpty) homeBanner = ads.placements.first;
+    } catch (_) {}
     ShoppaComparison? comparison;
     var promotionCount = 0;
     var unreadNotifications = 0;
@@ -55,6 +67,7 @@ class _MallTabScreenState extends State<MallTabScreen> {
       comparison: comparison,
       promotionCount: promotionCount,
       unreadNotifications: unreadNotifications,
+      homeBanner: homeBanner,
     );
   }
 
@@ -108,6 +121,13 @@ class _MallTabScreenState extends State<MallTabScreen> {
                   ),
                   const SizedBox(height: 16),
                   _SavingsHero(comparison: data.comparison),
+                  if (data.homeBanner != null) ...[
+                    const SizedBox(height: 12),
+                    AdBanner(
+                      placement: data.homeBanner!,
+                      adsRepository: widget.adsRepository,
+                    ),
+                  ],
                   if (data.unreadNotifications > 0) ...[
                     const SizedBox(height: 12),
                     ListTile(
@@ -227,11 +247,13 @@ class _MallData {
     this.comparison,
     this.promotionCount = 0,
     this.unreadNotifications = 0,
+    this.homeBanner,
   });
   final List<ShoppaList> lists;
   final ShoppaComparison? comparison;
   final int promotionCount;
   final int unreadNotifications;
+  final AdPlacement? homeBanner;
 }
 
 class _SavingsHero extends StatelessWidget {
