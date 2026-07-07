@@ -10,30 +10,31 @@ Monorepo for Shoppa: a mobile-first shopping intelligence platform (South Africa
 
 ## Status (Milestone 3 — Intelligence, July 2026)
 
-**Released:** `v0.0.2-m2` on `main` (Milestone 2 complete)
+**Released:** `v0.0.3-m3` on `main` (Milestone 3 complete)
 
-**Active branch:** `milestone/m3-intelligence` (in progress)
+**Active branch:** `milestone/m4-delivery` (next)
 
-| Area | Done in M3 (so far) |
-|------|---------------------|
+| Area | Done in M3 |
+|------|------------|
 | **Catalogue search** | `GET /v1/products?q=` — region-scoped product search |
 | **Store price lookup** | `GET /v1/products/{id}/store-price?store_id=` for shop-mode prefill |
 | **Catalogue-linked items** | Product picker on add-item; `product_id` sent to API |
 | **Compare depth** | List selector, winner banner, savings vs worst store |
 | **Session summary** | Spend + potential savings from comparison (FR-4.4 / FR-5.3) |
 | **Promotions polish** | Seeded promos; Mall chip + Profile link to `/promotions` |
-| **M3 smoke** | `python scripts/m3_smoke.py` validates savings + promos after seed |
+| **Price-drop feed** | `GET /v1/notifications`, mark-read; Mall + Profile links (TC-5.5) |
+| **Scraper skeleton** | Celery `scrape_catalogue_prices` re-ingests launch catalogue |
+| **M3 smoke** | `python scripts/m3_smoke.py` validates savings, promos, notifications |
 
 **Prior (M2 — `v0.0.2-m2`):** presence, chat, collaborator avatars, WS reconnect.
-
-**Remaining for M3 gate:** price-drop notification feed (TC-5.5), scraper task skeleton, tag `v0.0.3-m3`.
 
 ## Git branching
 
 | Branch | Purpose |
 |--------|---------|
 | `main` | Phase-gate releases only |
-| `milestone/m3-intelligence` | Phase 3 price intelligence (current) |
+| `milestone/m3-intelligence` | Phase 3 price intelligence (`v0.0.3-m3`) |
+| `milestone/m4-delivery` | Phase 4 delivery & fulfilment (current) |
 | `feat(scope): …` | Feature branches off the active milestone branch |
 
 ## Getting started

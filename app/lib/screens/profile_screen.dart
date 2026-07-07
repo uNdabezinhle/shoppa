@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 
 import '../core/auth_repository.dart';
 import '../core/auth_state.dart';
+import '../core/notifications_repository.dart';
 import '../theme/shoppa_theme.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -10,11 +11,13 @@ class ProfileScreen extends StatefulWidget {
     super.key,
     required this.authRepository,
     required this.authState,
+    required this.notificationsRepository,
     required this.user,
   });
 
   final AuthRepository authRepository;
   final AuthState authState;
+  final NotificationsRepository notificationsRepository;
   final ShoppaUser user;
 
   @override
@@ -24,6 +27,20 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> {
   bool _busy = false;
   String? _message;
+  int _unreadNotifications = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadUnreadCount();
+  }
+
+  Future<void> _loadUnreadCount() async {
+    try {
+      final count = await widget.notificationsRepository.unreadCount();
+      if (mounted) setState(() => _unreadNotifications = count);
+    } catch (_) {}
+  }
 
   Future<void> _upgrade() async {
     setState(() {
@@ -70,6 +87,45 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     )
                   : const Text('Upgrade to Professional'),
             ),
+          const SizedBox(height: 12),
+          ListTile(
+            tileColor: ShoppaColors.panel,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            leading: const Icon(Icons.notifications_outlined, color: ShoppaColors.amber),
+            title: const Text('Notifications', style: TextStyle(color: ShoppaColors.ink)),
+            subtitle: Text(
+              _unreadNotifications > 0
+                  ? '$_unreadNotifications unread price alert${_unreadNotifications == 1 ? '' : 's'}'
+                  : 'Price drops on your list items',
+              style: const TextStyle(color: ShoppaColors.mist, fontSize: 12),
+            ),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_unreadNotifications > 0)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: ShoppaColors.amber.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      '$_unreadNotifications',
+                      style: const TextStyle(
+                        color: ShoppaColors.amber,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                const Icon(Icons.chevron_right, color: ShoppaColors.mist),
+              ],
+            ),
+            onTap: () async {
+              await context.push('/notifications');
+              _loadUnreadCount();
+            },
+          ),
           const SizedBox(height: 12),
           ListTile(
             tileColor: ShoppaColors.panel,

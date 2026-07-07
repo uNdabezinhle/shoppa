@@ -10,6 +10,7 @@ import 'core/auth_state.dart';
 import 'core/list_chat_client.dart';
 import 'core/list_realtime_client.dart';
 import 'core/lists_repository.dart';
+import 'core/notifications_repository.dart';
 import 'core/offline_store.dart';
 import 'core/token_store.dart';
 import 'theme/shoppa_theme.dart';
@@ -48,6 +49,7 @@ void main() {
     apiClient,
     offlineStore: SharedPreferencesOfflineStore(),
   );
+  final notificationsRepository = NotificationsRepository(apiClient);
   final wsBaseUrl = _deriveWsBaseUrl(_apiBaseUrl);
   final realtimeClient = ListRealtimeClient(
     wsBaseUrl: wsBaseUrl,
@@ -62,6 +64,7 @@ void main() {
     authRepository: authRepository,
     catalogueRepository: catalogueRepository,
     listsRepository: listsRepository,
+    notificationsRepository: notificationsRepository,
     realtimeClient: realtimeClient,
     chatClient: chatClient,
     authState: authState,

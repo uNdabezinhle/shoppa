@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 
 import '../core/auth_repository.dart';
 import '../core/lists_repository.dart';
+import '../core/notifications_repository.dart';
 import '../theme/shoppa_theme.dart';
 
 /// Mall tab — greeting, savings hero, quick list preview (Phase 1 M1).
@@ -11,11 +12,13 @@ class MallTabScreen extends StatefulWidget {
     super.key,
     required this.authRepository,
     required this.listsRepository,
+    required this.notificationsRepository,
     required this.user,
   });
 
   final AuthRepository authRepository;
   final ListsRepository listsRepository;
+  final NotificationsRepository notificationsRepository;
   final ShoppaUser user;
 
   @override
@@ -35,6 +38,7 @@ class _MallTabScreenState extends State<MallTabScreen> {
     final lists = await widget.listsRepository.fetchLists();
     ShoppaComparison? comparison;
     var promotionCount = 0;
+    var unreadNotifications = 0;
     if (lists.isNotEmpty) {
       try {
         comparison = await widget.listsRepository.fetchComparison(lists.first.id);
@@ -43,10 +47,14 @@ class _MallTabScreenState extends State<MallTabScreen> {
     try {
       promotionCount = (await widget.listsRepository.fetchPromotions()).length;
     } catch (_) {}
+    try {
+      unreadNotifications = await widget.notificationsRepository.unreadCount();
+    } catch (_) {}
     return _MallData(
       lists: lists,
       comparison: comparison,
       promotionCount: promotionCount,
+      unreadNotifications: unreadNotifications,
     );
   }
 
@@ -100,6 +108,26 @@ class _MallTabScreenState extends State<MallTabScreen> {
                   ),
                   const SizedBox(height: 16),
                   _SavingsHero(comparison: data.comparison),
+                  if (data.unreadNotifications > 0) ...[
+                    const SizedBox(height: 12),
+                    ListTile(
+                      tileColor: ShoppaColors.panel,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        side: BorderSide(color: ShoppaColors.amber.withOpacity(0.35)),
+                      ),
+                      leading: const Icon(Icons.notifications_active, color: ShoppaColors.amber),
+                      title: Text(
+                        '${data.unreadNotifications} price alert${data.unreadNotifications == 1 ? '' : 's'}',
+                        style: const TextStyle(
+                          color: ShoppaColors.ink,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      trailing: const Icon(Icons.chevron_right, color: ShoppaColors.mist),
+                      onTap: () => context.push('/notifications'),
+                    ),
+                  ],
                   if (data.promotionCount > 0) ...[
                     const SizedBox(height: 12),
                     ListTile(
@@ -174,10 +202,12 @@ class _MallData {
     required this.lists,
     this.comparison,
     this.promotionCount = 0,
+    this.unreadNotifications = 0,
   });
   final List<ShoppaList> lists;
   final ShoppaComparison? comparison;
   final int promotionCount;
+  final int unreadNotifications;
 }
 
 class _SavingsHero extends StatelessWidget {

@@ -225,6 +225,7 @@ def _create_price_drop_alerts(product, store, old_price, new_price):
         .values_list("owner_id", flat=True)
         .distinct()
     )
+    user_ids = list(owner_ids)
     PriceAlert.objects.bulk_create(
         [
             PriceAlert(
@@ -234,6 +235,11 @@ def _create_price_drop_alerts(product, store, old_price, new_price):
                 old_price=old_price,
                 new_price=new_price,
             )
-            for owner_id in owner_ids
+            for owner_id in user_ids
         ]
+    )
+    from apps.notifications.services import create_price_drop_notifications
+
+    create_price_drop_notifications(
+        product, store, old_price, new_price, user_ids
     )

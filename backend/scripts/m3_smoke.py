@@ -24,8 +24,12 @@ from django.core.management import call_command  # noqa: E402
 from rest_framework.test import APIClient  # noqa: E402
 
 from apps.lists.models import ListCategory, ListItem, ShoppingList  # noqa: E402
-from apps.price_intelligence.models import Product  # noqa: E402
-from apps.price_intelligence.services import compare_stores_for_list  # noqa: E402
+from apps.notifications.models import Notification  # noqa: E402
+from apps.price_intelligence.models import PriceSource, Product, Store  # noqa: E402
+from apps.price_intelligence.services import (  # noqa: E402
+    compare_stores_for_list,
+    record_observation,
+)
 from apps.promotions.services import active_promotions_for_user  # noqa: E402
 from apps.users.models import User  # noqa: E402
 
@@ -78,9 +82,35 @@ def main() -> int:
         print("FAIL: product search returned no milk results", file=sys.stderr)
         return 1
 
+    store = Store.objects.filter(region="ZA").first()
+    if store is None:
+        print("FAIL: no seeded stores", file=sys.stderr)
+        return 1
+    Notification.objects.filter(user=user).delete()
+    record_observation(
+        product=milk,
+        store=store,
+        price=3500,
+        source=PriceSource.STORE,
+    )
+    record_observation(
+        product=milk,
+        store=store,
+        price=2500,
+        source=PriceSource.STORE,
+    )
+    if Notification.objects.filter(user=user, kind="price_drop").count() != 1:
+        print("FAIL: expected price-drop notification after qualifying drop", file=sys.stderr)
+        return 1
+    feed = client.get("/v1/notifications")
+    if feed.status_code != 200 or len(feed.data["results"]) < 1:
+        print("FAIL: notifications feed empty after price drop", file=sys.stderr)
+        return 1
+
     print(
         f"M3 smoke OK: {len(stores)} stores, saves {best['saves']} minor units, "
-        f"{promos.count()} promotions, search hit '{search.data['results'][0]['name']}'"
+        f"{promos.count()} promotions, search hit '{search.data['results'][0]['name']}', "
+        f"{len(feed.data['results'])} notification(s)"
     )
     return 0
 

@@ -260,6 +260,12 @@ class PriceDropAlertTests(TestCase):
         self.assertEqual(alerts.count(), 1)
         alert = alerts.first()
         self.assertEqual(alert.old_price, 3000)
+
+        from apps.notifications.models import Notification
+
+        self.assertEqual(
+            Notification.objects.filter(user=self.owner, kind="price_drop").count(), 1
+        )
         # reconcile() averages across both observations (weighted evenly,
         # since both are store-feed / same recency), so the new
         # CurrentPrice lands at the weighted midpoint, not the raw

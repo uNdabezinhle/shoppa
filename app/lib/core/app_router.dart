@@ -8,6 +8,7 @@ import '../screens/compare_tab_screen.dart';
 import '../screens/list_screen.dart';
 import '../screens/login_screen.dart';
 import '../screens/mall_tab_screen.dart';
+import '../screens/notifications_screen.dart';
 import '../screens/my_lists_tab_screen.dart';
 import '../screens/profile_screen.dart';
 import '../screens/promotions_screen.dart';
@@ -51,6 +52,7 @@ GoRouter createAppRouter(AppDeps deps) {
             builder: (context, state) => MallTabScreen(
               authRepository: deps.authRepository,
               listsRepository: deps.listsRepository,
+              notificationsRepository: deps.notificationsRepository,
               user: deps.authState.user!,
             ),
           ),
@@ -71,6 +73,7 @@ GoRouter createAppRouter(AppDeps deps) {
             builder: (context, state) => ProfileScreen(
               authRepository: deps.authRepository,
               authState: deps.authState,
+              notificationsRepository: deps.notificationsRepository,
               user: deps.authState.user!,
             ),
           ),
@@ -80,6 +83,12 @@ GoRouter createAppRouter(AppDeps deps) {
         path: '/promotions',
         builder: (context, state) => PromotionsScreen(
           listsRepository: deps.listsRepository,
+        ),
+      ),
+      GoRoute(
+        path: '/notifications',
+        builder: (context, state) => NotificationsScreen(
+          notificationsRepository: deps.notificationsRepository,
         ),
       ),
       GoRoute(
