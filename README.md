@@ -10,7 +10,9 @@ Monorepo for Shoppa: a mobile-first shopping intelligence platform (South Africa
 
 ## Status (Sprint 0 — Platform, July 2026)
 
-**Branch:** `milestone/m0-platform`
+**Released:** `v0.0.1-m0` on `main` (Sprint 0 complete)
+
+**Active branch:** `milestone/m1-foundation`
 
 | Area | Done in Sprint 0 |
 |------|------------------|
@@ -23,14 +25,14 @@ Monorepo for Shoppa: a mobile-first shopping intelligence platform (South Africa
 | **Mobile** | Persistent auth (`flutter_secure_storage`), token refresh, `go_router` |
 | **CI** | Backend + app workflows on `main` and `milestone/**`; staging deploy template |
 
-**Next:** merge `milestone/m0-platform` → `main`, tag `v0.0.1-m0`, open `milestone/m1-foundation`.
+**Next (M1):** tab shell, list CRUD UI, rate limits, expanded offline queue, profile screen.
 
 ## Git branching
 
 | Branch | Purpose |
 |--------|---------|
 | `main` | Phase-gate releases only |
-| `milestone/m0-platform` | Sprint 0 (current) |
+| `milestone/m1-foundation` | Phase 1 completion (current) |
 | `feat(scope): …` | Feature branches off the active milestone branch |
 
 ## Getting started
