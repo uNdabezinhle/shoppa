@@ -2,7 +2,9 @@
 /// §3.2) for use by the Mall (home) and List screens. Also implements the
 /// offline cache + mutation queue behind FR-4.2 -- see OfflineStore and
 /// syncPending() below.
+import 'dart:convert';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'api_client.dart';
 import 'offline_store.dart';
@@ -87,6 +89,20 @@ class ShoppaChatMessage {
   final String authorEmail;
   final String body;
   final String createdAt;
+}
+
+class ListExportResult {
+  ListExportResult({
+    required this.bytes,
+    required this.contentType,
+    required this.filename,
+    this.textPreview,
+  });
+
+  final Uint8List bytes;
+  final String contentType;
+  final String filename;
+  final String? textPreview;
 }
 
 class ShoppaList {
@@ -438,6 +454,24 @@ class ListsRepository {
     final json = await _client.post('/lists/$listId/duplicate', {})
         as Map<String, dynamic>;
     return ShoppaList.fromJson(json);
+  }
+
+  /// FR-8.4: export list as CSV or PDF bytes.
+  Future<ListExportResult> exportList(
+    String listId, {
+    String type = 'csv',
+  }) async {
+    final bytes = await _client.download(
+      '/lists/$listId/export',
+      queryParameters: {'type': type},
+    );
+    final contentType = type == 'pdf' ? 'application/pdf' : 'text/csv';
+    return ListExportResult(
+      bytes: bytes,
+      contentType: contentType,
+      filename: 'list-export.$type',
+      textPreview: type == 'csv' ? utf8.decode(bytes) : null,
+    );
   }
 
   Future<void> deleteList(String listId) {

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../core/api_client.dart';
 import '../core/catalogue_repository.dart';
@@ -453,6 +454,42 @@ class _ListScreenState extends State<ListScreen> {
 
   bool get _isProfessional => widget.accountType == 'professional';
 
+  Future<void> _exportList(String type) async {
+    try {
+      final result = await widget.listsRepository.exportList(
+        widget.listId,
+        type: type,
+      );
+      if (!mounted) return;
+      if (type == 'csv' && result.textPreview != null) {
+        await Clipboard.setData(ClipboardData(text: result.textPreview!));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('CSV copied to clipboard'),
+            backgroundColor: ShoppaColors.panel2,
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'PDF export ready (${result.bytes.length} bytes)',
+            ),
+            backgroundColor: ShoppaColors.panel2,
+          ),
+        );
+      }
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.message),
+          backgroundColor: ShoppaColors.rose,
+        ),
+      );
+    }
+  }
+
   Future<void> _scaleForGuests() async {
     final guests = await showScaleGuestsSheet(context);
     if (guests == null) return;
@@ -674,6 +711,14 @@ class _ListScreenState extends State<ListScreen> {
                     list == null ? null : () => _openShareSheet(list),
               );
             },
+          ),
+          PopupMenuButton<String>(
+            tooltip: 'Export list',
+            onSelected: _exportList,
+            itemBuilder: (context) => const [
+              PopupMenuItem(value: 'csv', child: Text('Export CSV')),
+              PopupMenuItem(value: 'pdf', child: Text('Export PDF')),
+            ],
           ),
           if (_isProfessional)
             FutureBuilder<ShoppaList>(

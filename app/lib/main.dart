@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import 'core/admin_repository.dart';
 import 'core/api_client.dart';
 import 'core/app_deps.dart';
 import 'core/catalogue_repository.dart';
@@ -46,6 +47,7 @@ void main() {
 
   final tokenStore = SecureTokenStore();
   final apiClient = ApiClient(baseUrl: _apiBaseUrl, tokenStore: tokenStore);
+  final adminRepository = AdminRepository(apiClient);
   final authRepository = AuthRepository(apiClient);
   final catalogueRepository = CatalogueRepository(apiClient);
   final deliveryRepository = DeliveryRepository(apiClient);
@@ -70,6 +72,7 @@ void main() {
   );
   final authState = AuthState(authRepository);
   final deps = AppDeps(
+    adminRepository: adminRepository,
     authRepository: authRepository,
     catalogueRepository: catalogueRepository,
     deliveryRepository: deliveryRepository,

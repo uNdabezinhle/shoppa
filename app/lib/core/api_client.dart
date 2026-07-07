@@ -1,6 +1,7 @@
 /// Thin HTTP client wrapper matching the API Specification's conventions:
 /// versioned base URL, JSON everywhere, bearer auth on authenticated calls.
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
@@ -206,6 +207,47 @@ class ApiClient {
       ),
       authenticated: authenticated,
     );
+  }
+
+  /// Binary download (e.g. list CSV/PDF export) without JSON decoding.
+  Future<Uint8List> download(
+    String path, {
+    bool authenticated = true,
+    Map<String, String>? queryParameters,
+  }) async {
+    var uri = _uri(path);
+    if (queryParameters != null && queryParameters.isNotEmpty) {
+      uri = uri.replace(queryParameters: queryParameters);
+    }
+    var retried = false;
+    while (true) {
+      final response = await _send(
+        () async => _client.get(
+          uri,
+          headers: await _headers(authenticated: authenticated),
+        ),
+      );
+      if (response.statusCode == 401 &&
+          authenticated &&
+          !retried &&
+          _canAutoRefresh(path)) {
+        retried = true;
+        final refreshed = await refreshTokens();
+        if (!refreshed) {
+          throw ApiException(401, 'unauthorized', 'Authentication required.');
+        }
+        continue;
+      }
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        return Uint8List.fromList(response.bodyBytes);
+      }
+      try {
+        _decode(response);
+      } on ApiException {
+        rethrow;
+      }
+      throw ApiException(response.statusCode, 'error', 'Download failed.');
+    }
   }
 
   dynamic _decode(http.Response response) {

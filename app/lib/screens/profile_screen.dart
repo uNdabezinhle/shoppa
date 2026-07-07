@@ -100,6 +100,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
             trailing: const Icon(Icons.chevron_right, color: ShoppaColors.mist),
             onTap: () => context.push('/subscriptions'),
           ),
+          if (user.accountType == 'admin') ...[
+            const SizedBox(height: 12),
+            ListTile(
+              tileColor: ShoppaColors.panel,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              leading: const Icon(Icons.admin_panel_settings_outlined, color: ShoppaColors.amber),
+              title: const Text('Admin Console', style: TextStyle(color: ShoppaColors.ink)),
+              subtitle: const Text(
+                'Overview and moderation queue',
+                style: TextStyle(color: ShoppaColors.mist, fontSize: 12),
+              ),
+              trailing: const Icon(Icons.chevron_right, color: ShoppaColors.mist),
+              onTap: () => context.push('/admin'),
+            ),
+          ],
           const SizedBox(height: 12),
           ListTile(
             tileColor: ShoppaColors.panel,

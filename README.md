@@ -10,23 +10,22 @@ Monorepo for Shoppa: a mobile-first shopping intelligence platform (South Africa
 
 ## Status (Milestone 5 — Subscriptions & Professional, July 2026)
 
-**Released:** `v0.0.4-m4` on `main` (Milestone 4 complete)
+**Released:** `v0.0.5-m5` on `main` (Milestone 5 complete)
 
-**Active branch:** `milestone/m5-subscriptions` (in progress)
+**Active branch:** `milestone/m6-ads` (next)
 
-| Area | Done in M5 (so far) |
-|------|---------------------|
+| Area | M5 deliverables |
+|------|-----------------|
 | **Subscription plans** | `GET /v1/subscriptions/plans`, `GET /v1/subscriptions/me` with feature flags |
 | **Stripe checkout** | `POST /v1/subscriptions/checkout` (dev-mode fallback without Stripe keys) |
-| **Webhook reconcile** | `POST /v1/webhooks/stripe` activates plan on `checkout.session.completed` |
+| **Webhook reconcile** | `checkout.session.completed`, `invoice.payment_failed`, `customer.subscription.deleted` |
 | **Free-tier limits** | Max 3 owned lists enforced on `POST /lists` (FR-9.3) |
 | **Professional mobile** | Scale-for-guests, publish toggle, discover/clone public lists |
-| **Pro upsell** | Mall “Cooking for a crowd?” card + Profile → `/subscriptions` |
-| **M5 smoke** | `python scripts/m5_smoke.py` validates plans, limits, checkout + webhook |
+| **List export** | `GET /v1/lists/{id}/export?type=csv|pdf` + mobile export menu (CSV clipboard, PDF snackbar) |
+| **Admin console** | `GET /v1/admin/overview`, moderation queue, partner stores + mobile `/admin` |
+| **M5 smoke** | `python scripts/m5_smoke.py` — plans, limits, checkout, downgrade, export, admin |
 
 **Prior (M4 — `v0.0.4-m4`):** delivery adapters, live quote WS, promo badges.
-
-**Remaining for M5 gate:** admin console, export UI, full Stripe verification (TC-9.4), tag `v0.0.5-m5`.
 
 ## Git branching
 
@@ -35,7 +34,8 @@ Monorepo for Shoppa: a mobile-first shopping intelligence platform (South Africa
 | `main` | Phase-gate releases only |
 | `milestone/m3-intelligence` | Phase 3 price intelligence (`v0.0.3-m3`) |
 | `milestone/m4-delivery` | Phase 4 delivery & fulfilment (`v0.0.4-m4`) |
-| `milestone/m5-subscriptions` | Phase 5 subscriptions & professional tools (current) |
+| `milestone/m5-subscriptions` | Phase 5 subscriptions & professional tools (`v0.0.5-m5`) |
+| `milestone/m6-ads` | Phase 6 ads & monetization (current) |
 | `feat(scope): …` | Feature branches off the active milestone branch |
 
 ## Getting started
@@ -115,7 +115,7 @@ python scripts/m4_smoke.py
 cd backend
 python manage.py migrate
 python scripts/m5_smoke.py
-# In the app: Profile → Plans & Billing; Professional list → scale / publish
+# In the app: Profile → Plans & Billing; list → Export; admin users → Admin Console
 ```
 
 ## Conventions

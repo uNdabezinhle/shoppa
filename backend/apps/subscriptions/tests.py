@@ -136,3 +136,50 @@ class FreeTierListLimitTests(APITestCase):
             format="json",
         )
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class SubscriptionPaymentFailureTests(APITestCase):
+    """TC-9.4: failed or expired payment downgrades access."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="billing@example.com",
+            email="billing@example.com",
+            password="pw12345!",
+        )
+        self.client.force_authenticate(self.user)
+        ensure_user_subscription(self.user)
+        self.user.subscription.plan_id = "professional"
+        self.user.subscription.stripe_subscription_id = "sub_test_123"
+        self.user.subscription.save()
+
+    def test_payment_failed_downgrades_to_free(self):
+        response = self.client.post(
+            reverse("stripe-webhook"),
+            data=json.dumps(
+                {
+                    "type": "invoice.payment_failed",
+                    "data": {"object": {"subscription": "sub_test_123"}},
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.subscription.refresh_from_db()
+        self.assertEqual(self.user.subscription.plan_id, "free")
+        self.assertFalse(user_has_feature(self.user, "scale_lists"))
+
+    def test_subscription_deleted_downgrades_to_free(self):
+        response = self.client.post(
+            reverse("stripe-webhook"),
+            data=json.dumps(
+                {
+                    "type": "customer.subscription.deleted",
+                    "data": {"object": {"id": "sub_test_123"}},
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.subscription.refresh_from_db()
+        self.assertEqual(self.user.subscription.plan_id, "free")

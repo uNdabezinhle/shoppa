@@ -72,15 +72,21 @@ def ensure_user_subscription(user):
 
 def get_active_subscription(user):
     ensure_plans_seeded()
-    try:
-        return user.subscription
-    except UserSubscription.DoesNotExist:
+    subscription = (
+        UserSubscription.objects.select_related("plan")
+        .filter(user_id=user.pk)
+        .first()
+    )
+    if subscription is None:
         return ensure_user_subscription(user)
+    return subscription
 
 
 def user_feature_flags(user) -> set[str]:
     subscription = get_active_subscription(user)
     if subscription.status != UserSubscription.Status.ACTIVE:
+        return set()
+    if subscription.plan_id == "free":
         return set()
     return set(subscription.plan.features or [])
 
@@ -93,6 +99,8 @@ def owned_list_limit(user):
     subscription = get_active_subscription(user)
     if subscription.status != UserSubscription.Status.ACTIVE:
         return 3
+    if subscription.plan_id == "free":
+        return subscription.plan.max_owned_lists
     return subscription.plan.max_owned_lists
 
 
@@ -181,6 +189,58 @@ def activate_subscription(user, plan_slug, *, stripe_subscription_id=""):
         user.account_type = AccountType.PROFESSIONAL
         user.save(update_fields=["account_type"])
     return subscription
+
+
+def downgrade_to_free(user):
+    """TC-9.4: revert paid access after failed/expired billing."""
+    subscription = ensure_user_subscription(user)
+    subscription.plan_id = "free"
+    subscription.status = UserSubscription.Status.ACTIVE
+    subscription.stripe_subscription_id = ""
+    subscription.current_period_end = None
+    subscription.save(
+        update_fields=[
+            "plan",
+            "status",
+            "stripe_subscription_id",
+            "current_period_end",
+            "updated_at",
+        ]
+    )
+    return subscription
+
+
+def mark_subscription_past_due(stripe_subscription_id):
+    subscription = UserSubscription.objects.filter(
+        stripe_subscription_id=stripe_subscription_id
+    ).first()
+    if subscription is None:
+        return None
+    subscription.status = UserSubscription.Status.PAST_DUE
+    subscription.save(update_fields=["status", "updated_at"])
+    return subscription
+
+
+def handle_payment_failed(event_object):
+    stripe_sub_id = event_object.get("subscription")
+    if not stripe_sub_id:
+        return None
+    subscription = UserSubscription.objects.filter(
+        stripe_subscription_id=stripe_sub_id
+    ).first()
+    if subscription is None:
+        return None
+    return downgrade_to_free(subscription.user)
+
+
+def handle_subscription_deleted(event_object):
+    stripe_sub_id = event_object.get("id")
+    subscription = UserSubscription.objects.filter(
+        stripe_subscription_id=stripe_sub_id
+    ).first()
+    if subscription is None:
+        return None
+    return downgrade_to_free(subscription.user)
 
 
 def handle_checkout_completed(event_object):

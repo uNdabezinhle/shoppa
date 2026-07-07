@@ -15,3 +15,4 @@ daphne==4.1.2
 celery==5.4.0
 django-celery-beat==2.7.0
 redis==5.0.8
+stripe==11.4.1

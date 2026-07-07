@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 
 import 'app_deps.dart';
 import 'auth_state.dart';
+import '../screens/admin_console_screen.dart';
 import '../screens/app_shell.dart';
 import '../screens/compare_tab_screen.dart';
 import '../screens/delivery_screen.dart';
@@ -92,6 +93,12 @@ GoRouter createAppRouter(AppDeps deps) {
         path: '/notifications',
         builder: (context, state) => NotificationsScreen(
           notificationsRepository: deps.notificationsRepository,
+        ),
+      ),
+      GoRoute(
+        path: '/admin',
+        builder: (context, state) => AdminConsoleScreen(
+          adminRepository: deps.adminRepository,
         ),
       ),
       GoRoute(

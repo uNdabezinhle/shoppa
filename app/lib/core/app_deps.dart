@@ -1,3 +1,4 @@
+import 'admin_repository.dart';
 import 'auth_repository.dart';
 import 'auth_state.dart';
 import 'catalogue_repository.dart';
@@ -12,6 +13,7 @@ import 'subscriptions_repository.dart';
 /// Shared dependencies wired once in [main] and passed into the router.
 class AppDeps {
   AppDeps({
+    required this.adminRepository,
     required this.authRepository,
     required this.catalogueRepository,
     required this.deliveryRepository,
@@ -24,6 +26,7 @@ class AppDeps {
     required this.authState,
   });
 
+  final AdminRepository adminRepository;
   final AuthRepository authRepository;
   final CatalogueRepository catalogueRepository;
   final DeliveryRepository deliveryRepository;

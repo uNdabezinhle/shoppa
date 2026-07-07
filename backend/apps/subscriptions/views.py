@@ -15,6 +15,8 @@ from .services import (
     ensure_plans_seeded,
     get_active_subscription,
     handle_checkout_completed,
+    handle_payment_failed,
+    handle_subscription_deleted,
 )
 
 logger = logging.getLogger(__name__)
@@ -127,7 +129,12 @@ class StripeWebhookView(APIView):
         event_type = event.get("type", "unknown")
         logger.info("Stripe webhook received: %s", event_type)
 
+        payload_object = event.get("data", {}).get("object", {})
         if event_type == "checkout.session.completed":
-            handle_checkout_completed(event.get("data", {}).get("object", {}))
+            handle_checkout_completed(payload_object)
+        elif event_type == "invoice.payment_failed":
+            handle_payment_failed(payload_object)
+        elif event_type == "customer.subscription.deleted":
+            handle_subscription_deleted(payload_object)
 
         return Response({"received": True, "type": event_type})
