@@ -47,6 +47,7 @@ class _ListScreenState extends State<ListScreen> {
   int _pendingCount = 0;
   final Map<String, String> _activeEditors = {};
   RealtimeConnectionState _connectionState = RealtimeConnectionState.connecting;
+  final _realtimeBroadcast = StreamController<ListRealtimeEvent>.broadcast();
   // SRS FR-5.3/FR-5.4: the store the shopper says they're currently in,
   // picked from the comparison sheet. Session-only (not persisted) --
   // once set, it's forwarded on every check-off so the server can record
@@ -72,7 +73,10 @@ class _ListScreenState extends State<ListScreen> {
     );
     _realtimeSubscription = widget.realtimeClient
         .connect(widget.listId)
-        .listen(_onRealtimeEvent);
+        .listen((event) {
+      if (!_realtimeBroadcast.isClosed) _realtimeBroadcast.add(event);
+      _onRealtimeEvent(event);
+    });
   }
 
   void _onRealtimeEvent(ListRealtimeEvent event) {
@@ -107,6 +111,7 @@ class _ListScreenState extends State<ListScreen> {
     _reloadDebounce?.cancel();
     _realtimeSubscription?.cancel();
     _connectionSubscription?.cancel();
+    unawaited(_realtimeBroadcast.close());
     super.dispose();
   }
 
@@ -414,6 +419,7 @@ class _ListScreenState extends State<ListScreen> {
         listsRepository: widget.listsRepository,
         listId: widget.listId,
         canManage: list.isOwner,
+        realtimeEvents: _realtimeBroadcast.stream,
       ),
     );
   }
@@ -703,11 +709,13 @@ class _ShareSheet extends StatefulWidget {
     required this.listsRepository,
     required this.listId,
     required this.canManage,
+    this.realtimeEvents,
   });
 
   final ListsRepository listsRepository;
   final String listId;
   final bool canManage;
+  final Stream<ListRealtimeEvent>? realtimeEvents;
 
   @override
   State<_ShareSheet> createState() => _ShareSheetState();
@@ -718,11 +726,26 @@ class _ShareSheetState extends State<_ShareSheet> {
   final _emailController = TextEditingController();
   String _permission = 'view';
   String? _error;
+  StreamSubscription<ListRealtimeEvent>? _collaboratorEvents;
 
   @override
   void initState() {
     super.initState();
     _collaborators = widget.listsRepository.fetchCollaborators(widget.listId);
+    _collaboratorEvents = widget.realtimeEvents
+        ?.where(
+          (e) =>
+              e.event == 'collaborator.joined' ||
+              e.event == 'collaborator.removed',
+        )
+        .listen((_) => _reload());
+  }
+
+  @override
+  void dispose() {
+    _collaboratorEvents?.cancel();
+    _emailController.dispose();
+    super.dispose();
   }
 
   void _reload() {

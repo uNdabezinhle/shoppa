@@ -13,7 +13,13 @@ from rest_framework.test import APITestCase
 
 from apps.users.models import User
 
-from .models import ListCategory, ListItem, ShoppingList
+from .models import (
+    CollaboratorPermission,
+    ListCategory,
+    ListCollaborator,
+    ListItem,
+    ShoppingList,
+)
 
 
 class ShoppingListTests(APITestCase):
@@ -452,6 +458,29 @@ class RealtimeBroadcastTests(APITestCase):
         self.assertEqual(list_id, self.list.id)
         self.assertEqual(event, "collaborator.joined")
         self.assertEqual(payload["user_email"], friend.email)
+
+    @patch("apps.lists.views.broadcast_list_event")
+    def test_remove_collaborator_broadcasts_collaborator_removed(self, mock_broadcast):
+        friend = User.objects.create_user(
+            username="friend3@example.com",
+            email="friend3@example.com",
+            password="a-strong-passw0rd!",
+        )
+        ListCollaborator.objects.create(
+            list=self.list,
+            user=friend,
+            permission=CollaboratorPermission.VIEW,
+        )
+        url = reverse(
+            "list-collaborators-detail",
+            kwargs={"list_id": self.list.id, "user_id": friend.id},
+        )
+        response = self.client.delete(url)
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        list_id, event, payload = mock_broadcast.call_args[0]
+        self.assertEqual(list_id, self.list.id)
+        self.assertEqual(event, "collaborator.removed")
+        self.assertEqual(payload["user_id"], str(friend.id))
 
 
 class FieldConflictResolutionTests(APITestCase):

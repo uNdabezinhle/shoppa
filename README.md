@@ -10,27 +10,29 @@ Monorepo for Shoppa: a mobile-first shopping intelligence platform (South Africa
 
 ## Status (Milestone 2 — Collaboration, July 2026)
 
-**Released:** `v0.0.1-m1` on `main` (Milestone 1 complete)
+**Released:** `v0.0.2-m2` on `main` (Milestone 2 complete)
 
-**Active branch:** `milestone/m2-collaboration` (in progress)
+**Active branch:** `milestone/m3-intelligence` (next)
 
-| Area | Done in M2 (so far) |
-|------|---------------------|
-| **Presence** | `presence.joined` / `presence.left` on `ws/lists/{id}`; live-editing banner |
-| **Chat (FR-3.4)** | `GET/POST /lists/{id}/messages`, `ws/lists/{id}/chat`, in-list chat sheet |
-| **List index** | Collaborator avatar preview on `GET /lists` |
-| **Mobile UX** | WebSocket reconnect/backoff, debounced refetch, activity timestamps |
+| Area | Done in M2 |
+|------|------------|
+| **FR-3.1 Share** | View/edit permissions, collaborator sheet with live WS refresh |
+| **FR-3.2 Real-time** | `ws/lists/{id}`, presence, reconnect/backoff, TC-3.2 propagation test |
+| **FR-3.3 Activity** | Per-list feed with timestamps and pull-to-refresh |
+| **FR-3.4 Chat** | `GET/POST /lists/{id}/messages`, `ws/lists/{id}/chat`, in-list chat sheet |
+| **Mobile polish** | Presence banner, collaborator avatar stack, debounced refetch |
+| **Load gate** | 32-subscriber fan-out test + `scripts/ws_loadtest.py` for staging |
 
 **Prior (M1 — `v0.0.1-m1`):** tab shell, list CRUD UI, rate limits, profile, expanded offline queue.
 
-**Remaining for M2 gate:** TC-3.2 propagation perf test, Channels/Redis load test, share-sheet live refresh, tag `v0.0.2-m2`.
+**Next (M3):** price intelligence UX, promotions polish, comparison depth.
 
 ## Git branching
 
 | Branch | Purpose |
 |--------|---------|
 | `main` | Phase-gate releases only |
-| `milestone/m2-collaboration` | Phase 2 collaboration (current) |
+| `milestone/m3-intelligence` | Phase 3 price intelligence (current) |
 | `feat(scope): …` | Feature branches off the active milestone branch |
 
 ## Getting started
@@ -87,6 +89,13 @@ daphne -b 0.0.0.0 -p 8000 shoppa_api.asgi:application
 ```
 
 With Redis (`REDIS_URL` set), presence and broadcasts fan out across workers.
+
+### Staging load probe (M2 gate)
+
+```bash
+cd backend
+python scripts/ws_loadtest.py --list-id <uuid> --subscribers 50
+```
 
 ## Conventions
 
