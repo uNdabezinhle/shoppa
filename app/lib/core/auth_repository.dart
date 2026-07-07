@@ -96,4 +96,18 @@ class AuthRepository {
   Future<void> logout() async {
     await _client.tokenStore.clear();
   }
+
+  /// POPIA data portability — GET /users/me/data-export.
+  Future<Map<String, dynamic>> exportMyData() async {
+    final json = await _client.get('/users/me/data-export');
+    return json as Map<String, dynamic>;
+  }
+
+  /// POPIA erasure — POST /users/me/delete-account (caller should log out after).
+  Future<void> deleteAccount({required String password}) async {
+    await _client.post('/users/me/delete-account', {
+      'password': password,
+    }, authenticated: true);
+    await _client.tokenStore.clear();
+  }
 }

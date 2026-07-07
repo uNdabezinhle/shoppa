@@ -6,48 +6,46 @@ Monorepo for Shoppa: a mobile-first shopping intelligence platform (South Africa
 
 - `backend/` — Django REST Framework API (`shoppa_api`), organized into focused apps per the Solution Architecture.
 - `app/` — Flutter application (`shoppa_app`) targeting iOS, Android, and Web.
-- `docker-compose.yml` — containerized Postgres + Redis + API (Daphne) + Celery stack.
+- `docker-compose.yml` — local Postgres + Redis + API (Daphne) + Celery stack.
+- `docker-compose.prod.yml` — production-like stack with hardened defaults.
 
-## Status (Milestone 6 — Ads & Monetization, July 2026)
+## Status (Milestone 7 — Launch Readiness, July 2026)
 
-**Released:** `v0.0.6-m6` on `main` (Milestone 6 complete)
+**Released:** `v1.0.0` on `main` (GA launch gate)
 
-**Active branch:** `milestone/m7-launch` (next)
-
-| Area | M6 deliverables |
+| Area | M7 deliverables |
 |------|-----------------|
-| **House ads API** | `GET /v1/ads/placements`, `POST /v1/ads/impressions`, `POST /v1/ads/clicks` |
-| **ads_free suppression** | Empty placements + no-op tracking for paid tiers (FR-10.4) |
-| **Frequency capping** | Interstitial/rewarded capped per session (FR-10.5 / TC-10.5) |
-| **Mobile ad slots** | Home + list banners, native in compare sheet, checkout interstitials |
-| **Docker stack** | `docker compose up` runs migrate + seed + Daphne API + Celery |
-| **Health probe** | `GET /v1/health/` for container orchestration |
-| **M6 smoke** | `python scripts/m6_smoke.py` |
+| **Launch meta** | `GET /v1/meta/launch` — version, milestones, feature manifest |
+| **Health probes** | `GET /v1/health/` (liveness), `GET /v1/health/ready/` (DB readiness) |
+| **Observability** | Correlation IDs (`X-Correlation-ID`), structured logging, optional Sentry |
+| **POPIA** | `GET /v1/users/me/data-export`, `POST /v1/users/me/delete-account` + Profile UI |
+| **Launch regression** | `python scripts/m7_smoke.py` runs m3–m6 smokes + platform checks |
+| **CI launch gate** | `.github/workflows/launch-gate.yml` — full suite + Docker build |
+| **Production Docker** | `docker-compose.prod.yml` + `backend/.env.production.example` |
 
-**Prior (M5 — `v0.0.5-m5`):** subscriptions, admin console, list export.
+**Prior (M6 — `v0.0.6-m6`):** house ads, Docker dev stack.
 
 ## Git branching
 
 | Branch | Purpose |
 |--------|---------|
-| `main` | Phase-gate releases only |
-| `milestone/m5-subscriptions` | Phase 5 subscriptions (`v0.0.5-m5`) |
+| `main` | GA releases (`v1.0.0`) |
 | `milestone/m6-ads` | Phase 6 ads & Docker (`v0.0.6-m6`) |
-| `milestone/m7-launch` | Phase 7 launch readiness (current) |
+| `milestone/m7-launch` | Phase 7 launch readiness (`v1.0.0`) |
 | `feat(scope): …` | Feature branches off the active milestone branch |
 
 ## Getting started
 
 ### Docker (recommended)
 
-Runs the full backend in containers — Postgres, Redis, API, Celery worker + beat:
-
 ```bash
 docker compose up -d --build
 curl http://localhost:8000/v1/health/
+curl http://localhost:8000/v1/health/ready/
+curl http://localhost:8000/v1/meta/launch
 ```
 
-The API entrypoint runs migrations and `seed_launch_data` on startup. Flutter against the emulator:
+Flutter against the emulator:
 
 ```bash
 cd app
@@ -55,10 +53,12 @@ flutter pub get
 flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8000/v1
 ```
 
-Stop and reset data:
+### Production-like Docker
 
 ```bash
-docker compose down -v
+cp backend/.env.production.example .env.production
+# Edit SECRET_KEY and POSTGRES_PASSWORD
+docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
 ```
 
 ### Backend (sqlite, no Redis)
@@ -67,28 +67,11 @@ docker compose down -v
 cd backend
 python -m venv .venv
 # Windows: .venv\Scripts\activate
-# macOS/Linux: source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
 python manage.py migrate
 python manage.py seed_launch_data
-python manage.py runserver
-```
-
-### Backend (Docker infra only)
-
-```bash
-docker compose up -d postgres redis
-cd backend
-cp .env.example .env
-# Set DATABASE_URL=postgres://shoppa:shoppa@localhost:5432/shoppa
-# Set REDIS_URL=redis://localhost:6379/0
-python manage.py migrate
-python manage.py seed_launch_data
 daphne -b 0.0.0.0 -p 8000 shoppa_api.asgi:application
-# Separate terminals:
-celery -A shoppa_api worker -l info
-celery -A shoppa_api beat -l info
 ```
 
 ### App
@@ -97,46 +80,34 @@ celery -A shoppa_api beat -l info
 cd app
 flutter pub get
 flutter run
-# Optional API override:
-flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8000/v1
 ```
 
-Requires Flutter **3.22+** / Dart **3.4+** (matches CI stable channel).
+Requires Flutter **3.22+** / Dart **3.4+**.
 
-### Real-time (WebSockets)
-
-List sync and chat require the ASGI server (not plain `runserver` WSGI):
+### M7 launch gate
 
 ```bash
 cd backend
-daphne -b 0.0.0.0 -p 8000 shoppa_api.asgi:application
+python manage.py test
+python scripts/m7_smoke.py
 ```
 
-### M6 demo flow
+Profile → **Privacy & Data** for POPIA export and account deletion.
+
+### Prior milestone smokes
 
 ```bash
-cd backend
-python scripts/m6_smoke.py
-# Or with Docker:
-docker compose up -d --build
-docker compose exec api python scripts/m6_smoke.py
-# In the app (free tier): Mall banner, list banner, compare native ad, session interstitial
-# Premium tier: no ads anywhere
-```
-
-### M5 demo flow
-
-```bash
-cd backend
-python scripts/m5_smoke.py
-# Profile → Plans & Billing; list → Export; admin users → Admin Console
+python scripts/m3_smoke.py   # price comparison
+python scripts/m4_smoke.py   # delivery quotes
+python scripts/m5_smoke.py   # subscriptions
+python scripts/m6_smoke.py   # house ads
 ```
 
 ## Conventions
 
-- API: versioned at `/v1`, JSON, snake_case fields, UUID resource IDs, money as integer minor units + `currency_code`, cursor-based pagination.
-- Commits: one feature per commit, `type(scope): summary` (e.g. `feat(backend): registration endpoint`).
+- API: versioned at `/v1`, JSON, snake_case fields, UUID resource IDs, money as integer minor units + `currency_code`.
+- Commits: `type(scope): summary` (e.g. `feat(platform): launch meta endpoint`).
 
 ## Open governance items (Implementation Plan §12)
 
-Resolve before the phases they affect: POPIA review, scraping legal sign-off, localization scope for GA, launch concurrency targets for load tests, app-store submission buffer.
+Resolve before production cutover: POPIA legal review, scraping legal sign-off, localization scope, launch concurrency load-test targets, app-store submission buffer.

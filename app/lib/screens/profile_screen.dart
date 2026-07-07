@@ -1,6 +1,10 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 
+import '../core/api_client.dart';
 import '../core/auth_repository.dart';
 import '../core/auth_state.dart';
 import '../core/notifications_repository.dart';
@@ -40,6 +44,48 @@ class _ProfileScreenState extends State<ProfileScreen> {
       final count = await widget.notificationsRepository.unreadCount();
       if (mounted) setState(() => _unreadNotifications = count);
     } catch (_) {}
+  }
+
+  Future<void> _exportData() async {
+    setState(() {
+      _busy = true;
+      _message = null;
+    });
+    try {
+      final payload = await widget.authRepository.exportMyData();
+      final text = const JsonEncoder.withIndent('  ').convert(payload);
+      await Clipboard.setData(ClipboardData(text: text));
+      setState(() => _message = 'Your data export was copied to the clipboard.');
+    } on ApiException catch (e) {
+      setState(() => _message = e.message);
+    } finally {
+      setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _deleteAccount() async {
+    final password = await showDialog<String>(
+      context: context,
+      builder: (context) => const _DeleteAccountDialog(),
+    );
+    if (password == null || password.isEmpty) return;
+    setState(() {
+      _busy = true;
+      _message = null;
+    });
+    try {
+      await widget.authRepository.deleteAccount(password: password);
+      await widget.authState.logout();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Account deleted')),
+        );
+      }
+    } on ApiException catch (e) {
+      setState(() => _message = e.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   Future<void> _upgrade() async {
@@ -168,6 +214,59 @@ class _ProfileScreenState extends State<ProfileScreen> {
             onTap: () => context.push('/promotions'),
           ),
           const SizedBox(height: 12),
+          ListTile(
+            tileColor: ShoppaColors.panel,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            leading: const Icon(Icons.privacy_tip_outlined, color: ShoppaColors.amber),
+            title: const Text('Privacy & Data', style: TextStyle(color: ShoppaColors.ink)),
+            subtitle: const Text(
+              'POPIA export and account deletion',
+              style: TextStyle(color: ShoppaColors.mist, fontSize: 12),
+            ),
+            trailing: const Icon(Icons.chevron_right, color: ShoppaColors.mist),
+            onTap: () => showModalBottomSheet<void>(
+              context: context,
+              backgroundColor: ShoppaColors.panel,
+              builder: (context) => Padding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const Text(
+                      'Your data (POPIA)',
+                      style: TextStyle(
+                        color: ShoppaColors.ink,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 16,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Export a portable copy of your profile and lists, or '
+                      'permanently delete your account.',
+                      style: TextStyle(color: ShoppaColors.mist, fontSize: 12),
+                    ),
+                    const SizedBox(height: 16),
+                    OutlinedButton(
+                      onPressed: _busy ? null : _exportData,
+                      child: const Text('Export my data'),
+                    ),
+                    const SizedBox(height: 8),
+                    OutlinedButton(
+                      onPressed: _busy ? null : _deleteAccount,
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: ShoppaColors.rose,
+                        side: const BorderSide(color: ShoppaColors.rose),
+                      ),
+                      child: const Text('Delete account'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
           OutlinedButton(
             onPressed: () => widget.authState.logout(),
             child: const Text('Log out'),
@@ -178,6 +277,57 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ],
         ],
       ),
+    );
+  }
+}
+
+class _DeleteAccountDialog extends StatefulWidget {
+  const _DeleteAccountDialog();
+
+  @override
+  State<_DeleteAccountDialog> createState() => _DeleteAccountDialogState();
+}
+
+class _DeleteAccountDialogState extends State<_DeleteAccountDialog> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Delete account'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'This permanently removes your account and owned lists. '
+            'Enter your password to confirm.',
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _controller,
+            obscureText: true,
+            decoration: const InputDecoration(labelText: 'Password'),
+            onSubmitted: (_) => Navigator.of(context).pop(_controller.text),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(_controller.text),
+          child: const Text('Delete'),
+        ),
+      ],
     );
   }
 }

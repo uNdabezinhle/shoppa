@@ -1,0 +1,94 @@
+# Production-like stack — TLS termination and secrets are expected at the
+# edge (load balancer / ingress). Set env vars via .env.production or your
+# orchestrator's secret store.
+#
+# Usage:
+#   docker compose -f docker-compose.prod.yml up -d --build
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-shoppa}
+      POSTGRES_USER: ${POSTGRES_USER:-shoppa}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - shoppa_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-shoppa}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - shoppa_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    build: ./backend
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      DEBUG: "False"
+      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY}
+      DATABASE_URL: postgres://${POSTGRES_USER:-shoppa}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-shoppa}
+      REDIS_URL: redis://redis:6379/0
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-api.shoppa.app}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-https://app.shoppa.app}
+      SHOPPA_RELEASE_VERSION: ${SHOPPA_RELEASE_VERSION:-1.0.0}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: production
+      SEED_LAUNCH_DATA: "false"
+      LOG_LEVEL: INFO
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/v1/health/ready/')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+
+  celery-worker:
+    build: ./backend
+    command: celery -A shoppa_api worker -l info
+    environment:
+      DEBUG: "False"
+      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY}
+      DATABASE_URL: postgres://${POSTGRES_USER:-shoppa}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-shoppa}
+      REDIS_URL: redis://redis:6379/0
+      SEED_LAUNCH_DATA: "false"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  celery-beat:
+    build: ./backend
+    command: celery -A shoppa_api beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    environment:
+      DEBUG: "False"
+      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY}
+      DATABASE_URL: postgres://${POSTGRES_USER:-shoppa}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-shoppa}
+      REDIS_URL: redis://redis:6379/0
+      SEED_LAUNCH_DATA: "false"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  shoppa_pgdata:
+  shoppa_redis:

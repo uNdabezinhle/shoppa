@@ -6,10 +6,12 @@ relative to /v1, matching the API Specification's versioning convention.
 from django.contrib import admin
 from django.urls import include, path
 
-from .health import health_check
+from .platform import LaunchMetaView, health_check, readiness_check
 
 urlpatterns = [
     path("v1/health/", health_check, name="health"),
+    path("v1/health/ready/", readiness_check, name="health-ready"),
+    path("v1/meta/launch", LaunchMetaView.as_view(), name="meta-launch"),
     path("admin/", admin.site.urls),
     path("v1/", include("apps.users.urls")),
     path("v1/", include("apps.lists.urls")),

@@ -1,0 +1,81 @@
+name: launch-gate
+
+# Full regression + milestone smokes before GA sign-off (Test Plan §8.2).
+on:
+  push:
+    branches:
+      - main
+      - milestone/**
+    paths:
+      - "backend/**"
+      - "app/**"
+      - "docker-compose.yml"
+      - ".github/workflows/launch-gate.yml"
+  pull_request:
+    branches:
+      - main
+      - milestone/**
+    paths:
+      - "backend/**"
+      - "app/**"
+      - "docker-compose.yml"
+      - ".github/workflows/launch-gate.yml"
+
+jobs:
+  backend-regression:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Migrate
+        env:
+          SECRET_KEY: ci-launch-gate
+          DATABASE_URL: sqlite:///launch_gate.sqlite3
+        run: python manage.py migrate --noinput
+
+      - name: Full test suite
+        env:
+          SECRET_KEY: ci-launch-gate
+          DATABASE_URL: sqlite:///launch_gate.sqlite3
+        run: python manage.py test
+
+      - name: M7 launch smoke
+        env:
+          SECRET_KEY: ci-launch-gate
+          DATABASE_URL: sqlite:///launch_gate.sqlite3
+        run: python scripts/m7_smoke.py
+
+      - name: Build Docker image
+        run: docker build -t shoppa-backend:launch-gate .
+
+  app-regression:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Run tests
+        run: flutter test

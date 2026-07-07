@@ -24,6 +24,7 @@ INSTALLED_APPS = [
     # server (which serves WebSockets too) instead of plain WSGI --
     # matches how the app actually runs in production (asgi.py + Daphne).
     "daphne",
+    "shoppa_api.apps.ShoppaApiConfig",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -49,6 +50,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    "shoppa_api.middleware.CorrelationIdMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -194,3 +196,51 @@ STRIPE_CHECKOUT_CANCEL_URL = os.environ.get(
 
 # Firebase Cloud Messaging (Phase 2+) — server key for push dispatch.
 FCM_SERVER_KEY = os.environ.get("FCM_SERVER_KEY", "")
+
+# Launch / ops (M7)
+SHOPPA_RELEASE_VERSION = os.environ.get("SHOPPA_RELEASE_VERSION", "1.0.0")
+
+# Production hardening when DEBUG is off (staging/prod).
+if not DEBUG:
+    SECURE_BROWSER_XSS_FILTER = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "True") == "True"
+    CSRF_COOKIE_SECURE = os.environ.get("CSRF_COOKIE_SECURE", "True") == "True"
+    SECURE_SSL_REDIRECT = os.environ.get("SECURE_SSL_REDIRECT", "False") == "True"
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {
+            "format": "%(levelname)s %(name)s %(message)s",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "verbose",
+        },
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": os.environ.get("LOG_LEVEL", "INFO"),
+    },
+}
+
+SENTRY_DSN = os.environ.get("SENTRY_DSN", "")
+if SENTRY_DSN:
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.django import DjangoIntegration
+
+        sentry_sdk.init(
+            dsn=SENTRY_DSN,
+            integrations=[DjangoIntegration()],
+            traces_sample_rate=float(os.environ.get("SENTRY_TRACES_SAMPLE_RATE", "0.1")),
+            send_default_pii=False,
+            environment=os.environ.get("SENTRY_ENVIRONMENT", "production"),
+            release=SHOPPA_RELEASE_VERSION,
+        )
+    except ImportError:
+        pass

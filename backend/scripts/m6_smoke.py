@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
+import uuid
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -93,7 +94,7 @@ def main() -> int:
         print("FAIL: impression not recorded", file=sys.stderr)
         return 1
 
-    session_key = "m6-smoke-session"
+    session_key = f"m6-smoke-{uuid.uuid4().hex[:12]}"
     interstitial = client.get(
         reverse("ads-placements"),
         {

@@ -16,3 +16,4 @@ celery==5.4.0
 django-celery-beat==2.9.0
 redis==5.0.8
 stripe==11.4.1
+sentry-sdk==2.19.2

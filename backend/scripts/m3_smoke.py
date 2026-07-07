@@ -15,6 +15,9 @@ from pathlib import Path
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "shoppa_api.settings")
+_hosts = os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1")
+if "testserver" not in _hosts:
+    os.environ["ALLOWED_HOSTS"] = f"{_hosts},testserver"
 
 import django  # noqa: E402
 
@@ -25,7 +28,13 @@ from rest_framework.test import APIClient  # noqa: E402
 
 from apps.lists.models import ListCategory, ListItem, ShoppingList  # noqa: E402
 from apps.notifications.models import Notification  # noqa: E402
-from apps.price_intelligence.models import PriceSource, Product, Store  # noqa: E402
+from apps.price_intelligence.models import (  # noqa: E402
+    CurrentPrice,
+    PriceObservation,
+    PriceSource,
+    Product,
+    Store,
+)
 from apps.price_intelligence.services import (  # noqa: E402
     compare_stores_for_list,
     record_observation,
@@ -87,16 +96,19 @@ def main() -> int:
         print("FAIL: no seeded stores", file=sys.stderr)
         return 1
     Notification.objects.filter(user=user).delete()
+    # Isolate the drop test so repeated smoke runs are not diluted by seed history.
+    PriceObservation.objects.filter(product=milk, store=store).delete()
+    CurrentPrice.objects.filter(product=milk, store=store).delete()
     record_observation(
         product=milk,
         store=store,
-        price=3500,
+        price=4000,
         source=PriceSource.STORE,
     )
     record_observation(
         product=milk,
         store=store,
-        price=2500,
+        price=2000,
         source=PriceSource.STORE,
     )
     if Notification.objects.filter(user=user, kind="price_drop").count() != 1:
