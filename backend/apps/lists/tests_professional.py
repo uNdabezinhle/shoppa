@@ -56,6 +56,23 @@ class ListDuplicateTests(APITestCase):
         response = self.client.post(self.url)
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
+    def test_duplicate_respects_owned_list_quota(self):
+        """Free tier max owned lists applies to clone as well as create."""
+        from apps.subscriptions.services import owned_list_limit
+
+        limit = owned_list_limit(self.user)
+        if limit is None:
+            self.skipTest("no owned-list limit configured")
+        # user already owns self.source; fill to the free-tier cap
+        for i in range(limit - 1):
+            ShoppingList.objects.create(
+                owner=self.user,
+                title=f"Filler {i}",
+                category=ListCategory.GROCERIES,
+            )
+        response = self.client.post(self.url)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
 
 class ListScaleTests(APITestCase):
     """TC-8.1: scaling a list by guest count adjusts all quantities

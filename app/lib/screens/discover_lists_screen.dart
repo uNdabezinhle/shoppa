@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../core/api_client.dart';
 import '../core/lists_repository.dart';
 import '../theme/shoppa_theme.dart';
 
@@ -16,7 +17,6 @@ class DiscoverListsScreen extends StatefulWidget {
 
 class _DiscoverListsScreenState extends State<DiscoverListsScreen> {
   late Future<List<ShoppaList>> _lists;
-  String? _error;
 
   @override
   void initState() {
@@ -27,7 +27,6 @@ class _DiscoverListsScreenState extends State<DiscoverListsScreen> {
   void _reload() {
     setState(() {
       _lists = widget.listsRepository.fetchPublicLists();
-      _error = null;
     });
   }
 
@@ -38,8 +37,19 @@ class _DiscoverListsScreenState extends State<DiscoverListsScreen> {
       context.push(
         '/lists/${clone.id}?title=${Uri.encodeComponent(clone.title)}',
       );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message), backgroundColor: ShoppaColors.rose),
+      );
     } catch (e) {
-      setState(() => _error = e.toString());
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not clone list: $e'),
+          backgroundColor: ShoppaColors.rose,
+        ),
+      );
     }
   }
 
@@ -57,9 +67,25 @@ class _DiscoverListsScreenState extends State<DiscoverListsScreen> {
             }
             if (snapshot.hasError) {
               return Center(
-                child: Text(
-                  'Could not load public lists: ${snapshot.error}',
-                  style: const TextStyle(color: ShoppaColors.rose),
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        snapshot.error is ApiException
+                            ? (snapshot.error as ApiException).message
+                            : 'Could not load public lists.',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: ShoppaColors.rose),
+                      ),
+                      const SizedBox(height: 16),
+                      FilledButton(
+                        onPressed: _reload,
+                        child: const Text('Retry'),
+                      ),
+                    ],
+                  ),
                 ),
               );
             }
@@ -67,10 +93,6 @@ class _DiscoverListsScreenState extends State<DiscoverListsScreen> {
             return ListView(
               padding: const EdgeInsets.all(20),
               children: [
-                if (_error != null) ...[
-                  Text(_error!, style: const TextStyle(color: ShoppaColors.rose)),
-                  const SizedBox(height: 12),
-                ],
                 if (lists.isEmpty)
                   const Padding(
                     padding: EdgeInsets.only(top: 40),

@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import '../core/ads_repository.dart';
 import '../core/api_client.dart';
 import '../core/catalogue_repository.dart';
+import '../core/export_download.dart';
 import '../core/list_chat_client.dart';
 import '../core/list_realtime_client.dart';
 import '../core/list_shop_helpers.dart';
@@ -498,31 +499,39 @@ class _ListScreenState extends State<ListScreen> {
       final result = await widget.listsRepository.exportList(
         widget.listId,
         type: type,
+        title: widget.title,
       );
       if (!mounted) return;
       if (type == 'csv' && result.textPreview != null) {
         await Clipboard.setData(ClipboardData(text: result.textPreview!));
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('CSV copied to clipboard'),
-            backgroundColor: ShoppaColors.panel2,
-          ),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'PDF export ready (${result.bytes.length} bytes)',
-            ),
-            backgroundColor: ShoppaColors.panel2,
-          ),
-        );
       }
+      final status = await saveListExport(
+        bytes: result.bytes,
+        filename: result.filename,
+        contentType: result.contentType,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            type == 'csv' ? 'CSV copied to clipboard · $status' : status,
+          ),
+          backgroundColor: ShoppaColors.panel2,
+        ),
+      );
     } on ApiException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(e.message),
+          backgroundColor: ShoppaColors.rose,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Export failed: $e'),
           backgroundColor: ShoppaColors.rose,
         ),
       );

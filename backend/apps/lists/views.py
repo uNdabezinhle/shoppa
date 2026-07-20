@@ -133,9 +133,14 @@ class ListDuplicateView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, pk):
+        from apps.subscriptions.services import assert_can_create_list
+
         source = get_object_or_404(ShoppingList, pk=pk)
         if source.role_for(request.user) is None and not source.is_public:
             raise Http404
+
+        # Same free-tier owned-list cap as POST /lists (duplicate is a create).
+        assert_can_create_list(request.user)
 
         clone = ShoppingList.objects.create(
             owner=request.user,

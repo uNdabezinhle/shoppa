@@ -460,16 +460,20 @@ class ListsRepository {
   Future<ListExportResult> exportList(
     String listId, {
     String type = 'csv',
+    String? title,
   }) async {
     final bytes = await _client.download(
       '/lists/$listId/export',
       queryParameters: {'type': type},
     );
     final contentType = type == 'pdf' ? 'application/pdf' : 'text/csv';
+    final base = (title == null || title.trim().isEmpty)
+        ? 'list-export'
+        : title.trim().replaceAll(RegExp(r'[^\w.\- ]+'), '_');
     return ListExportResult(
       bytes: bytes,
       contentType: contentType,
-      filename: 'list-export.$type',
+      filename: '$base.$type',
       textPreview: type == 'csv' ? utf8.decode(bytes) : null,
     );
   }
