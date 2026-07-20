@@ -5,6 +5,7 @@ import '../core/ads_repository.dart';
 import '../core/auth_repository.dart';
 import '../core/list_shop_helpers.dart';
 import '../core/lists_repository.dart';
+import '../core/last_trip_lists_store.dart';
 import '../core/multi_list_trip.dart';
 import '../core/notifications_repository.dart';
 import '../core/receipt_capture.dart';
@@ -37,6 +38,7 @@ class MallTabScreen extends StatefulWidget {
 
 class _MallTabScreenState extends State<MallTabScreen> {
   late Future<_MallData> _data;
+  final LastTripListsStore _lastTripLists = SharedPreferencesLastTripListsStore();
   final ReceiptHistoryStore _receiptHistory =
       SharedPreferencesReceiptHistoryStore();
 
@@ -139,13 +141,23 @@ class _MallTabScreenState extends State<MallTabScreen> {
     }
     if (incomplete.length == 1) {
       final list = incomplete.first;
+      await _lastTripLists.setListIds([list.id]);
+      if (!mounted) return;
       context.push(
         listDetailPath(list.id, title: list.title, shop: true),
       );
       return;
     }
-    final selected = await showPickTripListsSheet(context, lists: incomplete);
+    final remembered = await _lastTripLists.getListIds();
+    if (!mounted) return;
+    final selected = await showPickTripListsSheet(
+      context,
+      lists: incomplete,
+      initialSelectedIds: remembered,
+    );
     if (selected == null || selected.isEmpty || !mounted) return;
+    await _lastTripLists.setListIds(selected);
+    if (!mounted) return;
     if (selected.length == 1) {
       final list = incomplete.firstWhere((l) => l.id == selected.first);
       context.push(

@@ -2312,11 +2312,25 @@ class _ListScreenState extends State<ListScreen> {
 
   Future<void> _restoreShoppingAtStore() async {
     final saved = await _sessionStore.getShoppingAt(widget.listId);
-    if (!mounted || saved == null) return;
-    setState(() {
-      _shoppingAtStoreId = saved.storeId;
-      _shoppingAtStoreName = saved.storeName;
-    });
+    if (!mounted) return;
+    if (saved != null && saved.storeName.trim().isNotEmpty) {
+      setState(() {
+        _shoppingAtStoreId = saved.storeId;
+        _shoppingAtStoreName = saved.storeName;
+      });
+      _refreshComparison();
+      return;
+    }
+    // Soft default for aisle walk when this list has no saved store yet.
+    final last = await _sessionStore.getLastStore();
+    final recent = await _receiptHistory.recent(limit: 40);
+    if (!mounted) return;
+    final fallback = resolveDefaultStoreName(
+      lastStoreName: last?.storeName,
+      frequentStores: frequentStoreNames(recent),
+    );
+    if (fallback == null) return;
+    await _setShoppingAtByName(fallback);
     _refreshComparison();
   }
 
@@ -3063,6 +3077,8 @@ class _ListScreenState extends State<ListScreen> {
       });
     } else if (value == 'expand_aisles') {
       setState(() => _collapsedAisleIds.clear());
+    } else if (value == 'skip_aisle') {
+      _skipPastAisle();
     } else if (value == 'aisle_layout') {
       await _pickAisleLayout();
     } else if (value == 'item_order') {
@@ -3106,6 +3122,46 @@ class _ListScreenState extends State<ListScreen> {
     } else if (value == 'publish') {
       if (list != null) await _togglePublish(list);
     }
+  }
+
+  /// Collapse current open aisle and expand the next — items stay unchecked.
+  void _skipPastAisle({String? fromAisleId}) {
+    final items = _listSnapshot?.items ?? const <ShoppaListItem>[];
+    final result = skipPastOpenAisle(
+      items: items,
+      collapsedIds: _collapsedAisleIds,
+      layout: _activeAisleLayout,
+      fromAisleId: fromAisleId,
+    );
+    if (result.skippedAisle == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No open aisles to skip'),
+          backgroundColor: ShoppaColors.panel2,
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+    setState(() {
+      _collapsedAisleIds
+        ..clear()
+        ..addAll(result.collapsedIds);
+    });
+    HapticFeedback.selectionClick();
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          formatAisleSkipMessage(
+            skipped: result.skippedAisle,
+            next: result.nextAisle,
+          ),
+        ),
+        backgroundColor: ShoppaColors.panel2,
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
   /// Check off every open item still in [section] (no price prompts — fast walk).
@@ -3277,6 +3333,9 @@ class _ListScreenState extends State<ListScreen> {
                   aisleId != 'checked' &&
                   list.canEdit
               ? () => _checkOffAisle(section, list)
+              : null,
+          onSkipAisle: openInSection > 0 && aisleId != 'checked'
+              ? () => _skipPastAisle(fromAisleId: aisleId)
               : null,
         ),
       ),
@@ -3683,6 +3742,11 @@ class _ListScreenState extends State<ListScreen> {
                           value: 'collapse_aisles',
                           child: Text('Collapse all aisles'),
                         ),
+                    if (_shopMode && _aisleOrder)
+                      const PopupMenuItem(
+                        value: 'skip_aisle',
+                        child: Text('Skip to next aisle'),
+                      ),
                     PopupMenuItem(
                       value: 'item_order',
                       child: Text(
@@ -5045,6 +5109,7 @@ class _AisleStickyHeaderDelegate extends SliverPersistentHeaderDelegate {
     required this.collapsed,
     this.onToggle,
     this.onCheckOffAisle,
+    this.onSkipAisle,
   });
 
   final String label;
@@ -5053,6 +5118,8 @@ class _AisleStickyHeaderDelegate extends SliverPersistentHeaderDelegate {
   final VoidCallback? onToggle;
   /// Bulk check-off for remaining items in this aisle.
   final VoidCallback? onCheckOffAisle;
+  /// Collapse this aisle and expand the next open one (no check-offs).
+  final VoidCallback? onSkipAisle;
 
   @override
   double get minExtent => 40;
@@ -5112,6 +5179,21 @@ class _AisleStickyHeaderDelegate extends SliverPersistentHeaderDelegate {
                   fontWeight: FontWeight.w600,
                 ),
               ),
+              if (onSkipAisle != null)
+                IconButton(
+                  tooltip: 'Skip aisle',
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(
+                    minWidth: 36,
+                    minHeight: 36,
+                  ),
+                  icon: const Icon(
+                    Icons.skip_next,
+                    size: 18,
+                    color: ShoppaColors.mist,
+                  ),
+                  onPressed: onSkipAisle,
+                ),
               if (onCheckOffAisle != null)
                 IconButton(
                   tooltip: 'Check off aisle',
@@ -5140,7 +5222,8 @@ class _AisleStickyHeaderDelegate extends SliverPersistentHeaderDelegate {
         oldDelegate.countLabel != countLabel ||
         oldDelegate.collapsed != collapsed ||
         oldDelegate.onToggle != onToggle ||
-        oldDelegate.onCheckOffAisle != onCheckOffAisle;
+        oldDelegate.onCheckOffAisle != onCheckOffAisle ||
+        oldDelegate.onSkipAisle != onSkipAisle;
   }
 }
 

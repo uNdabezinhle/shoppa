@@ -6,9 +6,13 @@ import '../core/multi_list_trip.dart';
 import '../theme/shoppa_theme.dart';
 
 /// Multi-select incomplete lists to shop in one combined trip.
+///
+/// [initialSelectedIds] pre-checks matching eligible lists (e.g. last trip).
+/// When null or empty after filtering, all eligible lists start selected.
 Future<List<String>?> showPickTripListsSheet(
   BuildContext context, {
   required List<ShoppaList> lists,
+  Iterable<String>? initialSelectedIds,
 }) {
   final eligible = lists.where(listEligibleForTrip).toList();
   if (eligible.isEmpty) {
@@ -21,14 +25,21 @@ Future<List<String>?> showPickTripListsSheet(
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
     ),
-    builder: (ctx) => _PickTripListsSheet(lists: eligible),
+    builder: (ctx) => _PickTripListsSheet(
+      lists: eligible,
+      initialSelectedIds: initialSelectedIds,
+    ),
   );
 }
 
 class _PickTripListsSheet extends StatefulWidget {
-  const _PickTripListsSheet({required this.lists});
+  const _PickTripListsSheet({
+    required this.lists,
+    this.initialSelectedIds,
+  });
 
   final List<ShoppaList> lists;
+  final Iterable<String>? initialSelectedIds;
 
   @override
   State<_PickTripListsSheet> createState() => _PickTripListsSheetState();
@@ -40,7 +51,15 @@ class _PickTripListsSheetState extends State<_PickTripListsSheet> {
   @override
   void initState() {
     super.initState();
-    _selected = widget.lists.map((l) => l.id).toSet();
+    final eligibleIds = widget.lists.map((l) => l.id).toSet();
+    final remembered = <String>{};
+    for (final raw in widget.initialSelectedIds ?? const <String>[]) {
+      final id = raw.trim();
+      if (eligibleIds.contains(id)) remembered.add(id);
+    }
+    _selected = remembered.isNotEmpty
+        ? remembered
+        : Set<String>.from(eligibleIds);
   }
 
   int get _remainingTotal {
@@ -56,6 +75,10 @@ class _PickTripListsSheetState extends State<_PickTripListsSheet> {
   @override
   Widget build(BuildContext context) {
     final bottom = MediaQuery.viewInsetsOf(context).bottom;
+    final usingRemembered = widget.initialSelectedIds != null &&
+        widget.initialSelectedIds!.any(
+          (id) => widget.lists.any((l) => l.id == id.trim()),
+        );
     return Padding(
       padding: EdgeInsets.only(bottom: bottom),
       child: SafeArea(
@@ -85,9 +108,11 @@ class _PickTripListsSheetState extends State<_PickTripListsSheet> {
                 ),
               ),
               const SizedBox(height: 4),
-              const Text(
-                'Combine remaining items from several lists into one shop',
-                style: TextStyle(color: ShoppaColors.mist, fontSize: 12),
+              Text(
+                usingRemembered
+                    ? 'Last trip’s lists pre-selected — adjust if needed'
+                    : 'Combine remaining items from several lists into one shop',
+                style: const TextStyle(color: ShoppaColors.mist, fontSize: 12),
               ),
               const SizedBox(height: 8),
               Row(

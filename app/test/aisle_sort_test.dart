@@ -176,6 +176,39 @@ void main() {
       expect(nextOpenAisleGroup(items)?.id, 'meat');
     });
 
+    test('skipPastOpenAisle collapses current and expands next', () {
+      final items = [
+        _item('Bananas'),
+        _item('Chicken'),
+        _item('Milk'),
+      ];
+      final first = skipPastOpenAisle(
+        items: items,
+        collapsedIds: {},
+      );
+      expect(first.skippedAisle?.id, 'produce');
+      expect(first.nextAisle?.id, 'meat');
+      expect(first.collapsedIds, contains('produce'));
+      expect(first.collapsedIds, isNot(contains('meat')));
+      expect(
+        formatAisleSkipMessage(
+          skipped: first.skippedAisle,
+          next: first.nextAisle,
+        ),
+        'Skipped Fruit & veg · Next up: Meat & deli',
+      );
+
+      final second = skipPastOpenAisle(
+        items: items,
+        collapsedIds: first.collapsedIds,
+        fromAisleId: 'meat',
+      );
+      expect(second.skippedAisle?.id, 'meat');
+      expect(second.nextAisle?.id, 'dairy');
+      expect(second.collapsedIds, containsAll(['produce', 'meat']));
+      expect(second.collapsedIds, isNot(contains('dairy')));
+    });
+
     test('tripStoreSuggestions merges frequent then known, deduped', () {
       final suggestions = tripStoreSuggestions(
         frequent: ['Checkers', 'My Corner Café', 'checkers'],

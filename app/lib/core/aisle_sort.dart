@@ -338,6 +338,90 @@ String formatNextAisleHint(AisleGroup? next) {
   return 'Next up: ${next.label}';
 }
 
+/// Result of collapsing the current open aisle and expanding the next (no check-offs).
+class AisleSkipResult {
+  const AisleSkipResult({
+    required this.collapsedIds,
+    this.skippedAisle,
+    this.nextAisle,
+  });
+
+  final Set<String> collapsedIds;
+  final AisleGroup? skippedAisle;
+  final AisleGroup? nextAisle;
+
+  bool get advanced => skippedAisle != null && nextAisle != null;
+}
+
+/// Collapse the focused open aisle and expand the next open one.
+///
+/// When [fromAisleId] is null, skips the first open aisle that is still expanded
+/// (or the first open aisle if every open aisle is collapsed).
+AisleSkipResult skipPastOpenAisle({
+  required List<ShoppaListItem> items,
+  required Set<String> collapsedIds,
+  StoreAisleLayout? layout,
+  String? fromAisleId,
+}) {
+  final resolved = layout ?? storeAisleLayoutById('default');
+  final sections = shopAisleSections(
+    items,
+    separateChecked: true,
+    includeChecked: false,
+    layout: resolved,
+  );
+  if (sections.isEmpty) {
+    return AisleSkipResult(collapsedIds: Set<String>.from(collapsedIds));
+  }
+
+  AisleGroup? skip;
+  final from = fromAisleId?.trim() ?? '';
+  if (from.isNotEmpty && from != 'checked') {
+    for (final s in sections) {
+      if (s.aisle.id == from) {
+        skip = s.aisle;
+        break;
+      }
+    }
+  }
+  if (skip == null) {
+    for (final s in sections) {
+      if (!collapsedIds.contains(s.aisle.id)) {
+        skip = s.aisle;
+        break;
+      }
+    }
+    skip ??= sections.first.aisle;
+  }
+
+  final next = nextOpenAisleGroup(
+    items,
+    layout: resolved,
+    afterAisleId: skip.id,
+  );
+  final nextCollapsed = Set<String>.from(collapsedIds)..add(skip.id);
+  if (next != null) {
+    nextCollapsed.remove(next.id);
+  }
+  return AisleSkipResult(
+    collapsedIds: nextCollapsed,
+    skippedAisle: skip,
+    nextAisle: next,
+  );
+}
+
+/// Snack copy after skipping an aisle without checking items off.
+String formatAisleSkipMessage({
+  required AisleGroup? skipped,
+  required AisleGroup? next,
+}) {
+  if (skipped == null) return 'No open aisles to skip';
+  if (next == null) {
+    return 'Skipped ${skipped.label} · last open aisle';
+  }
+  return 'Skipped ${skipped.label} · ${formatNextAisleHint(next)}';
+}
+
 /// Aisle groups in walk order for [layout], with any missing ids appended.
 List<AisleGroup> aisleGroupsForLayout(StoreAisleLayout layout) {
   final seen = <String>{};

@@ -98,10 +98,22 @@ class _MultiListTripScreenState extends State<MultiListTripScreen> {
 
   Future<void> _loadTripStore() async {
     final saved = await _sessionStore.getShoppingAt(_tripScopeId);
-    if (!mounted || saved == null) return;
-    final name = saved.storeName.trim();
-    if (name.isEmpty) return;
-    setState(() => _tripStoreName = name);
+    if (!mounted) return;
+    final scopeName = saved?.storeName.trim();
+    if (scopeName != null && scopeName.isNotEmpty) {
+      setState(() => _tripStoreName = scopeName);
+      return;
+    }
+    // Soft default: last store used anywhere, else most frequent from receipts.
+    final last = await _sessionStore.getLastStore();
+    final recent = await _receiptHistory.recent(limit: 40);
+    if (!mounted) return;
+    final fallback = resolveDefaultStoreName(
+      lastStoreName: last?.storeName,
+      frequentStores: frequentStoreNames(recent),
+    );
+    if (fallback == null) return;
+    await _setTripStore(fallback);
   }
 
   Future<void> _setTripStore(String? name) async {
@@ -1017,6 +1029,47 @@ class _MultiListTripScreenState extends State<MultiListTripScreen> {
   }
 
   /// Check off every open item still in [section] (no price prompts — fast walk).
+  /// Collapse current open aisle and expand the next — items stay unchecked.
+  void _skipPastAisle({String? fromAisleId}) {
+    if (_busy) return;
+    final items = _lines.map((l) => l.item).toList();
+    final result = skipPastOpenAisle(
+      items: items,
+      collapsedIds: _collapsedAisleIds,
+      layout: _activeAisleLayout,
+      fromAisleId: fromAisleId,
+    );
+    if (result.skippedAisle == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No open aisles to skip'),
+          backgroundColor: ShoppaColors.panel2,
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+    setState(() {
+      _collapsedAisleIds
+        ..clear()
+        ..addAll(result.collapsedIds);
+    });
+    HapticFeedback.selectionClick();
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          formatAisleSkipMessage(
+            skipped: result.skippedAisle,
+            next: result.nextAisle,
+          ),
+        ),
+        backgroundColor: ShoppaColors.panel2,
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
   Future<void> _checkOffAisle(TripAisleSection section) async {
     if (_busy || section.aisle.id == 'checked') return;
     final open = openTripLinesInAisle(_lines, section.aisle.id);
@@ -1658,6 +1711,8 @@ class _MultiListTripScreenState extends State<MultiListTripScreen> {
                   await _pickAisleLayout();
                 } else if (value == 'set_store') {
                   await _pickTripStore();
+                } else if (value == 'skip_aisle') {
+                  _skipPastAisle();
                 }
               },
               itemBuilder: (ctx) => [
@@ -1726,6 +1781,11 @@ class _MultiListTripScreenState extends State<MultiListTripScreen> {
                   const PopupMenuItem(
                     value: 'collapse_aisles',
                     child: Text('Collapse all aisles'),
+                  ),
+                if (_remaining > 0)
+                  const PopupMenuItem(
+                    value: 'skip_aisle',
+                    child: Text('Skip to next aisle'),
                   ),
                 PopupMenuItem(
                   value: 'focus_shop',
@@ -2450,6 +2510,11 @@ class _MultiListTripScreenState extends State<MultiListTripScreen> {
                   !_busy
               ? () => _checkOffAisle(section)
               : null,
+          onSkipAisle: openInSection > 0 &&
+                  aisleId != 'checked' &&
+                  !_busy
+              ? () => _skipPastAisle(fromAisleId: aisleId)
+              : null,
         ),
       ),
       if (!collapsed)
@@ -2496,6 +2561,7 @@ class _TripAisleStickyHeaderDelegate extends SliverPersistentHeaderDelegate {
     required this.canCollapse,
     this.onToggle,
     this.onCheckOffAisle,
+    this.onSkipAisle,
   });
 
   final String label;
@@ -2505,6 +2571,8 @@ class _TripAisleStickyHeaderDelegate extends SliverPersistentHeaderDelegate {
   final VoidCallback? onToggle;
   /// Bulk check-off for remaining items in this aisle.
   final VoidCallback? onCheckOffAisle;
+  /// Collapse this aisle and expand the next open one (no check-offs).
+  final VoidCallback? onSkipAisle;
 
   @override
   double get minExtent => 40;
@@ -2565,6 +2633,21 @@ class _TripAisleStickyHeaderDelegate extends SliverPersistentHeaderDelegate {
                   fontWeight: FontWeight.w600,
                 ),
               ),
+              if (onSkipAisle != null)
+                IconButton(
+                  tooltip: 'Skip aisle',
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(
+                    minWidth: 36,
+                    minHeight: 36,
+                  ),
+                  icon: const Icon(
+                    Icons.skip_next,
+                    size: 18,
+                    color: ShoppaColors.mist,
+                  ),
+                  onPressed: onSkipAisle,
+                ),
               if (onCheckOffAisle != null)
                 IconButton(
                   tooltip: 'Check off aisle',
@@ -2594,7 +2677,8 @@ class _TripAisleStickyHeaderDelegate extends SliverPersistentHeaderDelegate {
         oldDelegate.collapsed != collapsed ||
         oldDelegate.canCollapse != canCollapse ||
         oldDelegate.onToggle != onToggle ||
-        oldDelegate.onCheckOffAisle != onCheckOffAisle;
+        oldDelegate.onCheckOffAisle != onCheckOffAisle ||
+        oldDelegate.onSkipAisle != onSkipAisle;
   }
 }
 

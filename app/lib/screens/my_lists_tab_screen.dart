@@ -8,6 +8,7 @@ import '../core/list_shop_helpers.dart';
 import '../core/lists_repository.dart';
 import '../core/multi_list_trip.dart';
 import '../core/offline_store.dart';
+import '../core/last_trip_lists_store.dart';
 import '../core/pinned_lists_store.dart';
 import '../core/receipt_history_store.dart';
 import '../theme/shoppa_theme.dart';
@@ -34,6 +35,7 @@ class _MyListsTabScreenState extends State<MyListsTabScreen> {
   late Future<List<ShoppaList>> _lists;
   final _searchController = TextEditingController();
   final PinnedListsStore _pinnedStore = SharedPreferencesPinnedListsStore();
+  final LastTripListsStore _lastTripLists = SharedPreferencesLastTripListsStore();
   final ReceiptHistoryStore _receiptHistory =
       SharedPreferencesReceiptHistoryStore();
   final LastPaidPricesStore _lastPaidPrices =
@@ -327,11 +329,22 @@ class _MyListsTabScreenState extends State<MyListsTabScreen> {
       return;
     }
     if (incomplete.length == 1) {
-      _openList(incomplete.first, shop: true);
+      final only = incomplete.first;
+      await _lastTripLists.setListIds([only.id]);
+      if (!mounted) return;
+      _openList(only, shop: true);
       return;
     }
-    final selected = await showPickTripListsSheet(context, lists: incomplete);
+    final remembered = await _lastTripLists.getListIds();
+    if (!mounted) return;
+    final selected = await showPickTripListsSheet(
+      context,
+      lists: incomplete,
+      initialSelectedIds: remembered,
+    );
     if (selected == null || selected.isEmpty || !mounted) return;
+    await _lastTripLists.setListIds(selected);
+    if (!mounted) return;
     if (selected.length == 1) {
       final list = incomplete.firstWhere((l) => l.id == selected.first);
       _openList(list, shop: true);
