@@ -584,16 +584,20 @@ class _ListScreenState extends State<ListScreen> {
   }
 
   Future<void> _openShareSheet(ShoppaList list) async {
-    await showModalBottomSheet(
+    final left = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       builder: (context) => _ShareSheet(
         listsRepository: widget.listsRepository,
         listId: widget.listId,
         canManage: list.isOwner,
+        currentUserEmail: widget.currentUserEmail,
         realtimeEvents: _realtimeBroadcast.stream,
       ),
     );
+    if (left == true && mounted) {
+      Navigator.of(context).maybePop();
+    }
   }
 
   Future<void> _openActivitySheet() async {
@@ -1141,20 +1145,21 @@ class _ListScreenState extends State<ListScreen> {
 }
 
 /// Collaborator management sheet (SRS FR-3.1). Anyone on the list can see
-/// who else is on it; only the owner sees the invite form and remove
-/// buttons — the backend enforces this too, this just avoids showing
-/// controls that would 403.
+/// who else is on it; owner can invite/remove/change permission; a
+/// collaborator can leave themselves.
 class _ShareSheet extends StatefulWidget {
   const _ShareSheet({
     required this.listsRepository,
     required this.listId,
     required this.canManage,
+    this.currentUserEmail,
     this.realtimeEvents,
   });
 
   final ListsRepository listsRepository;
   final String listId;
   final bool canManage;
+  final String? currentUserEmail;
   final Stream<ListRealtimeEvent>? realtimeEvents;
 
   @override
@@ -1176,7 +1181,8 @@ class _ShareSheetState extends State<_ShareSheet> {
         ?.where(
           (e) =>
               e.event == 'collaborator.joined' ||
-              e.event == 'collaborator.removed',
+              e.event == 'collaborator.removed' ||
+              e.event == 'collaborator.updated',
         )
         .listen((_) => _reload());
   }
@@ -1212,12 +1218,40 @@ class _ShareSheetState extends State<_ShareSheet> {
   }
 
   Future<void> _remove(String userId) async {
-    await widget.listsRepository.removeCollaborator(widget.listId, userId);
-    _reload();
+    try {
+      await widget.listsRepository.removeCollaborator(widget.listId, userId);
+      _reload();
+    } on ApiException catch (e) {
+      setState(() => _error = e.message);
+    }
+  }
+
+  Future<void> _setPermission(ShoppaCollaborator c, String permission) async {
+    if (c.permission == permission) return;
+    try {
+      await widget.listsRepository.updateCollaboratorPermission(
+        widget.listId,
+        c.userId,
+        permission: permission,
+      );
+      _reload();
+    } on ApiException catch (e) {
+      setState(() => _error = e.message);
+    }
+  }
+
+  Future<void> _leave(ShoppaCollaborator me) async {
+    try {
+      await widget.listsRepository.leaveList(widget.listId, me.userId);
+      if (mounted) Navigator.of(context).pop(true);
+    } on ApiException catch (e) {
+      setState(() => _error = e.message);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final myEmail = widget.currentUserEmail?.toLowerCase();
     return Padding(
       padding: EdgeInsets.only(
         left: 20,
@@ -1255,22 +1289,54 @@ class _ShareSheetState extends State<_ShareSheet> {
                 );
               }
               return Column(
-                children: collaborators
-                    .map(
-                      (c) => ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: Text(c.userEmail),
-                        subtitle: Text(c.permission),
-                        trailing: widget.canManage
-                            ? IconButton(
-                                icon: const Icon(Icons.close,
-                                    color: ShoppaColors.rose),
-                                onPressed: () => _remove(c.userId),
-                              )
-                            : null,
-                      ),
-                    )
-                    .toList(),
+                children: collaborators.map((c) {
+                  final isMe = myEmail != null &&
+                      c.userEmail.toLowerCase() == myEmail;
+                  return ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(c.userEmail),
+                    subtitle: widget.canManage
+                        ? null
+                        : Text(c.permission),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (widget.canManage)
+                          DropdownButton<String>(
+                            value: c.permission,
+                            underline: const SizedBox.shrink(),
+                            items: const [
+                              DropdownMenuItem(
+                                value: 'view',
+                                child: Text('View'),
+                              ),
+                              DropdownMenuItem(
+                                value: 'edit',
+                                child: Text('Edit'),
+                              ),
+                            ],
+                            onChanged: (value) {
+                              if (value != null) _setPermission(c, value);
+                            },
+                          ),
+                        if (widget.canManage)
+                          IconButton(
+                            tooltip: 'Remove',
+                            icon: const Icon(
+                              Icons.close,
+                              color: ShoppaColors.rose,
+                            ),
+                            onPressed: () => _remove(c.userId),
+                          )
+                        else if (isMe)
+                          TextButton(
+                            onPressed: () => _leave(c),
+                            child: const Text('Leave'),
+                          ),
+                      ],
+                    ),
+                  );
+                }).toList(),
               );
             },
           ),
@@ -1310,6 +1376,9 @@ class _ShareSheetState extends State<_ShareSheet> {
                 child: const Text('Share'),
               ),
             ),
+          ] else if (_error != null) ...[
+            const SizedBox(height: 8),
+            Text(_error!, style: const TextStyle(color: ShoppaColors.rose)),
           ],
         ],
       ),

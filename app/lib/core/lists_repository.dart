@@ -296,11 +296,23 @@ class ListsRepository {
   final OfflineStore _offlineStore;
 
   Future<List<ShoppaList>> fetchLists() async {
-    final json = await _client.get('/lists') as Map<String, dynamic>;
-    final results = json['results'] as List;
-    return results
-        .map((e) => ShoppaList.fromJson(e as Map<String, dynamic>))
-        .toList();
+    try {
+      final json = await _client.get('/lists') as Map<String, dynamic>;
+      final results = json['results'] as List;
+      final maps = results
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList(growable: false);
+      await _offlineStore.cacheListsIndex(maps);
+      return maps
+          .map((e) => ShoppaList.fromJson(e))
+          .toList(growable: false);
+    } on NetworkUnavailableException {
+      final cached = await _offlineStore.getCachedListsIndex();
+      if (cached == null) rethrow;
+      return cached
+          .map((e) => ShoppaList.fromJson(e, fromCache: true))
+          .toList(growable: false);
+    }
   }
 
   /// SRS FR-4.2: falls back to the last cached detail response when the
@@ -824,6 +836,25 @@ class ListsRepository {
 
   Future<void> removeCollaborator(String listId, String userId) {
     return _client.delete('/lists/$listId/collaborators/$userId');
+  }
+
+  /// Owner: change collaborator view/edit permission.
+  Future<ShoppaCollaborator> updateCollaboratorPermission(
+    String listId,
+    String userId, {
+    required String permission,
+  }) async {
+    final json = await _client.patch(
+      '/lists/$listId/collaborators/$userId',
+      {'permission': permission},
+      authenticated: true,
+    ) as Map<String, dynamic>;
+    return ShoppaCollaborator.fromJson(json);
+  }
+
+  /// Collaborator self-leave (DELETE own collaborator row).
+  Future<void> leaveList(String listId, String userId) {
+    return removeCollaborator(listId, userId);
   }
 
   /// SRS FR-3.3: per-list activity feed.

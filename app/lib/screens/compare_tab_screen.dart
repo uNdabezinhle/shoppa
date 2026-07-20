@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../core/lists_repository.dart';
+import '../core/shopping_session_store.dart';
 import '../theme/shoppa_theme.dart';
 import '../widgets/confidence_chip.dart';
 
@@ -19,6 +20,25 @@ class _CompareTabScreenState extends State<CompareTabScreen> {
   String? _selectedListId;
   late Future<ShoppaComparison?> _comparison;
   bool _loadingLists = true;
+  final ShoppingSessionStore _sessionStore =
+      SharedPreferencesShoppingSessionStore();
+
+  Future<void> _setShoppingAt(ShoppaStoreComparison store) async {
+    final listId = _selectedListId;
+    if (listId == null) return;
+    await _sessionStore.setShoppingAt(
+      listId,
+      ShoppingAtStore(storeId: store.storeId, storeName: store.name),
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Shopping at ${store.name} — used for check-off prices on this list',
+        ),
+      ),
+    );
+  }
 
   @override
   void initState() {
@@ -209,6 +229,14 @@ class _CompareTabScreenState extends State<CompareTabScreen> {
                               ),
                             ],
                             const SizedBox(height: 8),
+                            const Text(
+                              'Tap a store to set it as where you\'re shopping.',
+                              style: TextStyle(
+                                color: ShoppaColors.mist,
+                                fontSize: 12,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
                             ...comparison.stores.map((store) {
                               final isBest =
                                   store.storeId == comparison.bestStoreId;
@@ -219,6 +247,7 @@ class _CompareTabScreenState extends State<CompareTabScreen> {
                                 color: ShoppaColors.panel,
                                 margin: const EdgeInsets.only(bottom: 10),
                                 child: ListTile(
+                                  onTap: () => _setShoppingAt(store),
                                   title: Text(
                                     store.name,
                                     style: TextStyle(

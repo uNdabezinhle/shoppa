@@ -27,6 +27,7 @@ from apps.price_intelligence.services import compare_stores_for_list, record_obs
 from apps.users.models import AccountType
 
 from .models import (
+    CollaboratorPermission,
     ListActivity,
     ListActivityAction,
     ListCollaborator,
@@ -518,35 +519,92 @@ class CollaboratorListView(SharedListMixin, generics.ListCreateAPIView):
         )
 
 
-class CollaboratorDetailView(generics.DestroyAPIView):
-    """Owner-only: removes a collaborator. 404s for anyone else (including
-    the collaborator being removed, and other collaborators) rather than
-    403ing, matching the no-existence-leak convention used elsewhere.
+class CollaboratorDetailView(APIView):
+    """PATCH permission (owner-only) or DELETE collaborator.
+
+    DELETE: list owner may remove any collaborator; a collaborator may
+    remove only themselves (self-leave). Everyone else gets 404 so we
+    never leak list existence (same convention as SharedListMixin).
     """
 
     permission_classes = [permissions.IsAuthenticated]
 
-    def get_object(self):
-        list_obj = get_object_or_404(
-            ShoppingList, pk=self.kwargs["list_id"], owner=self.request.user
+    def _resolve(self, request, list_id, user_id):
+        list_obj = get_object_or_404(ShoppingList, pk=list_id)
+        role = list_obj.role_for(request.user)
+        if role is None:
+            raise Http404
+        collaborator = get_object_or_404(
+            ListCollaborator, list=list_obj, user_id=user_id
         )
-        return get_object_or_404(
-            ListCollaborator, list=list_obj, user_id=self.kwargs["user_id"]
-        )
+        return list_obj, role, collaborator
 
-    def perform_destroy(self, instance):
-        list_id = instance.list_id
-        user_id = str(instance.user_id)
+    def patch(self, request, list_id, user_id):
+        list_obj, role, collaborator = self._resolve(request, list_id, user_id)
+        if role != "owner":
+            raise Http404
+        permission = request.data.get("permission")
+        if permission not in (
+            CollaboratorPermission.VIEW,
+            CollaboratorPermission.EDIT,
+        ):
+            return Response(
+                {
+                    "error": {
+                        "code": "validation_error",
+                        "message": "permission must be 'view' or 'edit'.",
+                    }
+                },
+                status=422,
+            )
+        if collaborator.permission != permission:
+            collaborator.permission = permission
+            collaborator.save(update_fields=["permission"])
+            ListActivity.objects.create(
+                list=list_obj,
+                actor=request.user,
+                action=ListActivityAction.COLLABORATOR_JOINED,
+                detail=(
+                    f"{collaborator.user.email} permission set to {permission}"
+                ),
+            )
+            broadcast_list_event(
+                list_obj.id,
+                "collaborator.updated",
+                ListCollaboratorSerializer(collaborator).data,
+            )
+        return Response(ListCollaboratorSerializer(collaborator).data)
+
+    def delete(self, request, list_id, user_id):
+        list_obj, role, collaborator = self._resolve(request, list_id, user_id)
+        is_owner = role == "owner"
+        is_self = str(request.user.id) == str(user_id)
+        if not is_owner and not is_self:
+            raise Http404
+        # Owners are not collaborator rows; self-leave is for collaborators only.
+        if is_owner and is_self:
+            raise Http404
+
+        email = collaborator.user.email
+        removed_user_id = str(collaborator.user_id)
+        detail = (
+            f"{email} left the list"
+            if is_self and not is_owner
+            else f"{email} removed"
+        )
         ListActivity.objects.create(
-            list=instance.list,
-            actor=self.request.user,
+            list=list_obj,
+            actor=request.user,
             action=ListActivityAction.COLLABORATOR_REMOVED,
-            detail=f"{instance.user.email} removed",
+            detail=detail,
         )
-        instance.delete()
+        collaborator.delete()
         broadcast_list_event(
-            list_id, "collaborator.removed", {"user_id": user_id}
+            list_obj.id,
+            "collaborator.removed",
+            {"user_id": removed_user_id},
         )
+        return Response(status=204)
 
 
 class ActivityCursorPagination(CursorPagination):

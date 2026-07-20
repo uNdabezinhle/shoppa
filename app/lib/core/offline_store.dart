@@ -55,6 +55,8 @@ class QueuedMutation {
 abstract class OfflineStore {
   Future<void> cacheListJson(String listId, Map<String, dynamic> json);
   Future<Map<String, dynamic>?> getCachedListJson(String listId);
+  Future<void> cacheListsIndex(List<Map<String, dynamic>> lists);
+  Future<List<Map<String, dynamic>>?> getCachedListsIndex();
   Future<void> enqueue(QueuedMutation mutation);
   Future<List<QueuedMutation>> pendingFor(String listId);
   Future<void> remove(String mutationId);
@@ -64,6 +66,7 @@ abstract class OfflineStore {
 /// need the cache to survive an app restart.
 class InMemoryOfflineStore implements OfflineStore {
   final Map<String, Map<String, dynamic>> _cache = {};
+  List<Map<String, dynamic>>? _listsIndex;
   final List<QueuedMutation> _pending = [];
 
   @override
@@ -74,6 +77,20 @@ class InMemoryOfflineStore implements OfflineStore {
   @override
   Future<Map<String, dynamic>?> getCachedListJson(String listId) async {
     return _cache[listId];
+  }
+
+  @override
+  Future<void> cacheListsIndex(List<Map<String, dynamic>> lists) async {
+    _listsIndex = lists
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList(growable: false);
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>?> getCachedListsIndex() async {
+    return _listsIndex
+        ?.map((e) => Map<String, dynamic>.from(e))
+        .toList(growable: false);
   }
 
   @override
@@ -96,6 +113,7 @@ class InMemoryOfflineStore implements OfflineStore {
 /// implementation used in main.dart.
 class SharedPreferencesOfflineStore implements OfflineStore {
   static const _pendingKey = 'shoppa.pending_mutations';
+  static const _listsIndexKey = 'shoppa.cached_lists_index';
   static String _cacheKey(String listId) => 'shoppa.cached_list.$listId';
 
   Future<SharedPreferences> get _prefs => SharedPreferences.getInstance();
@@ -112,6 +130,23 @@ class SharedPreferencesOfflineStore implements OfflineStore {
     final raw = prefs.getString(_cacheKey(listId));
     if (raw == null) return null;
     return (jsonDecode(raw) as Map).cast<String, dynamic>();
+  }
+
+  @override
+  Future<void> cacheListsIndex(List<Map<String, dynamic>> lists) async {
+    final prefs = await _prefs;
+    await prefs.setString(_listsIndexKey, jsonEncode(lists));
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>?> getCachedListsIndex() async {
+    final prefs = await _prefs;
+    final raw = prefs.getString(_listsIndexKey);
+    if (raw == null) return null;
+    final decoded = jsonDecode(raw) as List;
+    return decoded
+        .map((e) => (e as Map).cast<String, dynamic>())
+        .toList(growable: false);
   }
 
   @override

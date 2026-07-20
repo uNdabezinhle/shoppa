@@ -157,6 +157,8 @@ class _MyListsTabScreenState extends State<MyListsTabScreen> {
               );
             }
             final lists = snapshot.data ?? [];
+            final fromCache =
+                lists.isNotEmpty && lists.every((l) => l.fromCache);
             if (lists.isEmpty) {
               return ListView(
                 physics: const AlwaysScrollableScrollPhysics(),
@@ -174,10 +176,28 @@ class _MyListsTabScreenState extends State<MyListsTabScreen> {
             return ListView.separated(
               physics: const AlwaysScrollableScrollPhysics(),
               padding: const EdgeInsets.all(16),
-              itemCount: lists.length,
+              itemCount: lists.length + (fromCache ? 1 : 0),
               separatorBuilder: (_, __) => const SizedBox(height: 8),
               itemBuilder: (context, index) {
-                final list = lists[index];
+                if (fromCache && index == 0) {
+                  return Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: ShoppaColors.amber.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: ShoppaColors.amber.withOpacity(0.35)),
+                    ),
+                    child: const Text(
+                      'Offline — showing lists from your last successful sync.',
+                      style: TextStyle(
+                        color: ShoppaColors.ink,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  );
+                }
+                final list = lists[fromCache ? index - 1 : index];
                 return Dismissible(
                   key: ValueKey(list.id),
                   direction: list.isOwner

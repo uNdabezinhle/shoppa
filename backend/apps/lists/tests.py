@@ -343,6 +343,53 @@ class CollaborationTests(APITestCase):
             status.HTTP_404_NOT_FOUND,
         )
 
+    def test_collaborator_can_leave_list(self):
+        self._share(permission="view")
+        self.client.force_authenticate(self.friend)
+        detail_url = reverse(
+            "list-collaborators-detail",
+            kwargs={"list_id": self.list.id, "user_id": self.friend.id},
+        )
+        response = self.client.delete(detail_url)
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(
+            self.client.get(self.list_detail_url).status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+
+    def test_collaborator_cannot_remove_someone_else(self):
+        self._share(permission="edit")
+        other = User.objects.create_user(
+            username="third@example.com",
+            email="third@example.com",
+            password="a-strong-passw0rd!",
+        )
+        ListCollaborator.objects.create(
+            list=self.list, user=other, permission="view"
+        )
+        self.client.force_authenticate(self.friend)
+        detail_url = reverse(
+            "list-collaborators-detail",
+            kwargs={"list_id": self.list.id, "user_id": other.id},
+        )
+        response = self.client.delete(detail_url)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_owner_can_change_collaborator_permission(self):
+        self._share(permission="view")
+        self.client.force_authenticate(self.owner)
+        detail_url = reverse(
+            "list-collaborators-detail",
+            kwargs={"list_id": self.list.id, "user_id": self.friend.id},
+        )
+        response = self.client.patch(
+            detail_url, {"permission": "edit"}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["permission"], "edit")
+        collab = ListCollaborator.objects.get(list=self.list, user=self.friend)
+        self.assertEqual(collab.permission, "edit")
+
     def test_activity_feed_records_item_add_with_author_and_timestamp(self):
         """TC-3.3: activity feed records add/remove with author and timestamp."""
         self._share(permission="edit")

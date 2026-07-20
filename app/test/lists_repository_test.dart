@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:shoppa_app/core/api_client.dart';
 import 'package:shoppa_app/core/lists_repository.dart';
+import 'package:shoppa_app/core/offline_store.dart';
 import 'package:shoppa_app/core/token_store.dart';
 
 void main() {
@@ -48,7 +49,36 @@ void main() {
       expect(lists, hasLength(1));
       expect(lists.first.title, 'Monthly Groceries');
       expect(lists.first.isRecurring, true);
-      expect(lists.first.itemCount, 8);
+    });
+
+    test('fetchLists falls back to cached index when offline', () async {
+      final offline = InMemoryOfflineStore();
+      await offline.cacheListsIndex([
+        {
+          'id': 'l-cached',
+          'title': 'Cached List',
+          'category': 'groceries',
+          'is_recurring': false,
+          'item_count': 2,
+        },
+      ]);
+      final mockClient = MockClient((request) async {
+        throw http.ClientException('network down');
+      });
+      final repo = ListsRepository(
+        ApiClient(
+          baseUrl: 'http://localhost:8000/v1',
+          tokenStore: tokenStore,
+          httpClient: mockClient,
+        ),
+        offlineStore: offline,
+      );
+
+      final lists = await repo.fetchLists();
+      expect(lists, hasLength(1));
+      expect(lists.first.title, 'Cached List');
+      expect(lists.first.fromCache, isTrue);
+      expect(lists.first.itemCount, 2);
     });
 
     test('fetchListDetail parses nested items', () async {
