@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 
 import '../core/lists_repository.dart';
 import '../theme/shoppa_theme.dart';
+import '../widgets/confidence_chip.dart';
 
 class CompareTabScreen extends StatefulWidget {
   const CompareTabScreen({super.key, required this.listsRepository});
@@ -79,8 +80,8 @@ class _CompareTabScreenState extends State<CompareTabScreen> {
                     future: _comparison,
                     builder: (context, snapshot) {
                       if (snapshot.connectionState != ConnectionState.done) {
-                        return const ListView(
-                          children: [
+                        return ListView(
+                          children: const [
                             SizedBox(
                               height: 200,
                               child: Center(child: CircularProgressIndicator()),
@@ -226,12 +227,25 @@ class _CompareTabScreenState extends State<CompareTabScreen> {
                                           isBest ? FontWeight.w700 : FontWeight.w500,
                                     ),
                                   ),
-                                  subtitle: Text(
-                                    'Confidence: ${store.confidence}'
-                                    '${extra > 0 ? ' · +${_formatZar(extra)} vs best' : ''}',
-                                    style: const TextStyle(
-                                      color: ShoppaColors.mist,
-                                      fontSize: 12,
+                                  subtitle: Padding(
+                                    padding: const EdgeInsets.only(top: 4),
+                                    child: Row(
+                                      children: [
+                                        ConfidenceChip(
+                                          confidence: store.confidence,
+                                          compact: true,
+                                        ),
+                                        if (extra > 0) ...[
+                                          const SizedBox(width: 8),
+                                          Text(
+                                            '+${_formatZar(extra)} vs best',
+                                            style: const TextStyle(
+                                              color: ShoppaColors.mist,
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                        ],
+                                      ],
                                     ),
                                   ),
                                   trailing: Text(

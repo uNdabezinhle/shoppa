@@ -21,6 +21,11 @@ app/pubspec.lock
 **/ios/.symlinks/
 **/android/.gradle/
 
+# Local caches (Windows / agent workspaces)
+.pip-cache/
+.pub-cache/
+.tmp/
+
 # IDE / OS
 .vscode/
 .idea/

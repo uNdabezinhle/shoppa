@@ -1,8 +1,8 @@
 """Seed South-Africa launch stores, catalogue, and starter prices.
 
 Idempotent: safe to re-run in dev, CI, and staging. Prices are taken from
-the interactive prototype (docs/shoppa-prototype.jsx) as seed values until
-the scraper pipeline lands in Phase 3.
+the interactive prototype (docs/shoppa-prototype.jsx). The M8 seed scraper
+re-ingests the same catalogue via record_observation (FR-5.1 SCRAPED).
 """
 from decimal import Decimal
 
@@ -144,4 +144,37 @@ class Command(BaseCommand):
         ensure_house_ads_seeded()
         self.stdout.write("  House ad placements seeded")
 
+        try:
+            from apps.price_intelligence.search import reindex_products
+
+            n = reindex_products(products_by_key.values())
+            if n:
+                self.stdout.write(f"  Typesense reindexed {n} products")
+        except Exception:  # noqa: BLE001
+            pass
+
+        self._ensure_scrape_beat_task()
+
         self.stdout.write(self.style.SUCCESS("Launch seed data complete."))
+
+    def _ensure_scrape_beat_task(self):
+        """Register hourly catalogue scrape for django_celery_beat (M8)."""
+        try:
+            from django_celery_beat.models import IntervalSchedule, PeriodicTask
+        except Exception:  # noqa: BLE001
+            return
+
+        schedule, _ = IntervalSchedule.objects.get_or_create(
+            every=1,
+            period=IntervalSchedule.HOURS,
+        )
+        PeriodicTask.objects.update_or_create(
+            name="scrape-catalogue-prices-hourly",
+            defaults={
+                "interval": schedule,
+                "task": "price_intelligence.scrape_catalogue_prices",
+                "args": '["ZA"]',
+                "enabled": True,
+            },
+        )
+        self.stdout.write("  Celery beat: scrape-catalogue-prices-hourly")

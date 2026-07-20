@@ -33,6 +33,20 @@ services:
       timeout: 3s
       retries: 10
 
+  typesense:
+    image: typesense/typesense:27.1
+    command: ["--data-dir", "/data", "--api-key", "shoppa-dev-key", "--enable-cors"]
+    ports:
+      - "8108:8108"
+    volumes:
+      - shoppa_typesense:/data
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8108'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   api:
     build: ./backend
     ports:
@@ -42,8 +56,13 @@ services:
       SECRET_KEY: dev-compose-key
       DATABASE_URL: postgres://shoppa:shoppa@postgres:5432/shoppa
       REDIS_URL: redis://redis:6379/0
+      TYPESENSE_HOST: http://typesense:8108
+      TYPESENSE_API_KEY: shoppa-dev-key
+      SCRAPER_MODE: seed
+      SCRAPER_LIVE_ENABLED: "false"
       ALLOWED_HOSTS: localhost,127.0.0.1,api,testserver
       SEED_LAUNCH_DATA: "true"
+      SHOPPA_RELEASE_VERSION: "1.1.0"
     depends_on:
       postgres:
         condition: service_healthy
@@ -63,6 +82,9 @@ services:
       SECRET_KEY: dev-compose-key
       DATABASE_URL: postgres://shoppa:shoppa@postgres:5432/shoppa
       REDIS_URL: redis://redis:6379/0
+      TYPESENSE_HOST: http://typesense:8108
+      TYPESENSE_API_KEY: shoppa-dev-key
+      SCRAPER_MODE: seed
       SEED_LAUNCH_DATA: "false"
     depends_on:
       api:
@@ -75,6 +97,22 @@ services:
       SECRET_KEY: dev-compose-key
       DATABASE_URL: postgres://shoppa:shoppa@postgres:5432/shoppa
       REDIS_URL: redis://redis:6379/0
+      SCRAPER_MODE: seed
+      SEED_LAUNCH_DATA: "false"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # Periodic scrape runner (seed mode by default — no live retailer hits).
+  scraper:
+    build: ./backend
+    command: celery -A shoppa_api worker -l info -Q celery -n scraper@%h
+    environment:
+      SECRET_KEY: dev-compose-key
+      DATABASE_URL: postgres://shoppa:shoppa@postgres:5432/shoppa
+      REDIS_URL: redis://redis:6379/0
+      SCRAPER_MODE: seed
+      SCRAPER_LIVE_ENABLED: "false"
       SEED_LAUNCH_DATA: "false"
     depends_on:
       api:
@@ -82,3 +120,4 @@ services:
 
 volumes:
   shoppa_pgdata:
+  shoppa_typesense:

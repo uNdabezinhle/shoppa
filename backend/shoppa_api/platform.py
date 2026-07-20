@@ -1,4 +1,4 @@
-"""Launch readiness and platform metadata (M7 gate)."""
+"""Launch readiness and platform metadata (M7 gate, extended M8)."""
 import os
 
 from django.conf import settings
@@ -31,10 +31,19 @@ class LaunchMetaView(APIView):
     permission_classes = [permissions.AllowAny]
 
     def get(self, request):
+        typesense = bool(getattr(settings, "TYPESENSE_HOST", "") or "")
+        fcm = bool(getattr(settings, "FCM_SERVER_KEY", "") or "")
+        live_scraper = (
+            getattr(settings, "SCRAPER_MODE", "seed") == "live"
+            and getattr(settings, "SCRAPER_LIVE_ENABLED", False)
+        )
         return Response(
             {
                 "product": "Shoppa",
-                "version": os.environ.get("SHOPPA_RELEASE_VERSION", "1.0.0"),
+                "version": os.environ.get(
+                    "SHOPPA_RELEASE_VERSION",
+                    getattr(settings, "SHOPPA_RELEASE_VERSION", "1.1.0"),
+                ),
                 "api_version": "v1",
                 "default_region": settings.DEFAULT_REGION,
                 "default_currency": settings.DEFAULT_CURRENCY,
@@ -45,6 +54,8 @@ class LaunchMetaView(APIView):
                     "m4-delivery",
                     "m5-subscriptions",
                     "m6-ads",
+                    "m7-launch",
+                    "m8-data-intelligence",
                 ],
                 "launch_ready": True,
                 "features": {
@@ -54,6 +65,11 @@ class LaunchMetaView(APIView):
                     "delivery_quotes": True,
                     "subscriptions": True,
                     "house_ads": True,
+                    "typesense_search": typesense,
+                    "fcm_push": fcm,
+                    "live_scraper": live_scraper,
+                    "seed_scraper": True,
+                    "confidence_ui": True,
                 },
             }
         )

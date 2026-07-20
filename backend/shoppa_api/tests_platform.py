@@ -24,6 +24,10 @@ class PlatformHealthTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.data["launch_ready"])
         self.assertIn("m6-ads", response.data["milestones_complete"])
+        self.assertIn("m7-launch", response.data["milestones_complete"])
+        self.assertIn("m8-data-intelligence", response.data["milestones_complete"])
+        self.assertTrue(response.data["features"].get("seed_scraper"))
+        self.assertTrue(response.data["features"].get("confidence_ui"))
 
     def test_correlation_id_header_on_response(self):
         response = self.client.get(

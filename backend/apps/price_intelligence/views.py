@@ -26,8 +26,8 @@ class ProductSearchPagination(CursorPagination):
 class ProductSearchView(generics.ListAPIView):
     """GET /v1/products?q= — region-scoped catalogue search (M3 / FR-5.3).
 
-    DB-backed for now; Typesense integration can replace the queryset
-    filter without changing the response shape.
+    Prefers Typesense when configured (M8); falls back to DB icontains
+    without changing the response shape.
     """
 
     serializer_class = ProductSerializer
@@ -38,9 +38,23 @@ class ProductSearchView(generics.ListAPIView):
         region = getattr(self.request.user, "region", "ZA") or "ZA"
         qs = Product.objects.filter(region=region)
         query = self.request.query_params.get("q", "").strip()
-        if query:
-            qs = qs.filter(name__icontains=query)
-        return qs.order_by("name")
+        if not query:
+            return qs.order_by("name")
+
+        from .search import search_product_ids
+
+        ids = search_product_ids(query, region=region)
+        if ids is not None:
+            if not ids:
+                return Product.objects.none()
+            from django.db.models import Case, When
+
+            order = Case(
+                *[When(pk=pid, then=pos) for pos, pid in enumerate(ids)]
+            )
+            return qs.filter(id__in=ids).order_by(order)
+
+        return qs.filter(name__icontains=query).order_by("name")
 
 
 class ProductStorePriceView(APIView):

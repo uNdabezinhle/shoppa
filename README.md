@@ -9,21 +9,19 @@ Monorepo for Shoppa: a mobile-first shopping intelligence platform (South Africa
 - `docker-compose.yml` — local Postgres + Redis + API (Daphne) + Celery stack.
 - `docker-compose.prod.yml` — production-like stack with hardened defaults.
 
-## Status (Milestone 7 — Launch Readiness, July 2026)
+## Status (Milestone 8 — Data Intelligence, July 2026)
 
-**Released:** `v1.0.0` on `main` (GA launch gate)
+**Implemented** on `milestone/m8-data-intelligence` → target tag `v1.1.0`
 
-| Area | M7 deliverables |
+| Area | M8 deliverables |
 |------|-----------------|
-| **Launch meta** | `GET /v1/meta/launch` — version, milestones, feature manifest |
-| **Health probes** | `GET /v1/health/` (liveness), `GET /v1/health/ready/` (DB readiness) |
-| **Observability** | Correlation IDs (`X-Correlation-ID`), structured logging, optional Sentry |
-| **POPIA** | `GET /v1/users/me/data-export`, `POST /v1/users/me/delete-account` + Profile UI |
-| **Launch regression** | `python scripts/m7_smoke.py` runs m3–m6 smokes + platform checks |
-| **CI launch gate** | `.github/workflows/launch-gate.yml` — full suite + Docker build |
-| **Production Docker** | `docker-compose.prod.yml` + `backend/.env.production.example` |
+| **Scraper** | Seed-mode catalogue re-ingest (default/CI); live adapters opt-in (`SCRAPER_LIVE_ENABLED`); hourly Celery beat |
+| **Typesense** | Optional product search with DB `icontains` fallback |
+| **FCM push** | `POST /v1/devices` + Celery push on price-drop (no-op without `FCM_SERVER_KEY`) |
+| **Confidence UI** | Color chips on compare / shop-mode suggested price |
+| **Smoke** | `python scripts/m8_smoke.py` |
 
-**Prior (M6 — `v0.0.6-m6`):** house ads, Docker dev stack.
+**Prior (M7 — `v1.0.0`):** launch meta, health probes, POPIA, regression CI, prod Docker.
 
 ## Git branching
 
@@ -32,6 +30,7 @@ Monorepo for Shoppa: a mobile-first shopping intelligence platform (South Africa
 | `main` | GA releases (`v1.0.0`) |
 | `milestone/m6-ads` | Phase 6 ads & Docker (`v0.0.6-m6`) |
 | `milestone/m7-launch` | Phase 7 launch readiness (`v1.0.0`) |
+| `milestone/m8-data-intelligence` | Phase 8 scraper, Typesense, FCM, confidence UI (`v1.1.0`) |
 | `feat(scope): …` | Feature branches off the active milestone branch |
 
 ## Getting started
@@ -101,6 +100,7 @@ python scripts/m3_smoke.py   # price comparison
 python scripts/m4_smoke.py   # delivery quotes
 python scripts/m5_smoke.py   # subscriptions
 python scripts/m6_smoke.py   # house ads
+python scripts/m8_smoke.py   # scraper, search, FCM enqueue
 ```
 
 ## Conventions

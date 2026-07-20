@@ -14,6 +14,7 @@ import '../theme/shoppa_theme.dart';
 import '../widgets/ad_banner.dart';
 import '../widgets/ad_interstitial_sheet.dart';
 import '../widgets/ad_native_tile.dart';
+import '../widgets/confidence_chip.dart';
 import '../widgets/item_form_dialog.dart';
 import '../widgets/presence_banner.dart';
 import '../widgets/product_picker_sheet.dart';
@@ -204,9 +205,6 @@ class _ListScreenState extends State<ListScreen> {
           ? (storePrice.price / 100).toStringAsFixed(2)
           : '',
     );
-    final hint = storePrice != null
-        ? 'Suggested price (${storePrice.confidence} confidence)'
-        : null;
     final result = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
@@ -215,8 +213,22 @@ class _ListScreenState extends State<ListScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (hint != null) ...[
-              Text(hint, style: const TextStyle(color: ShoppaColors.mist, fontSize: 12)),
+            if (storePrice != null) ...[
+              Row(
+                children: [
+                  const Text(
+                    'Suggested price',
+                    style: TextStyle(color: ShoppaColors.mist, fontSize: 12),
+                  ),
+                  const SizedBox(width: 8),
+                  ConfidenceChip(confidence: storePrice.confidence, compact: true),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                ConfidenceChip.legendHint(storePrice.confidence),
+                style: const TextStyle(color: ShoppaColors.faint, fontSize: 11),
+              ),
               const SizedBox(height: 8),
             ],
             TextField(
@@ -1426,7 +1438,7 @@ class _ComparisonSheet extends StatelessWidget {
     return '$symbol${(minorUnits / 100).toStringAsFixed(2)}';
   }
 
-  Future<(_ComparisonPayload)> _loadComparisonPayload() async {
+  Future<_ComparisonPayload> _loadComparisonPayload() async {
     final comparison = await listsRepository.fetchComparison(listId);
     AdPlacement? nativeAd;
     try {
@@ -1436,7 +1448,7 @@ class _ComparisonSheet extends StatelessWidget {
       );
       if (ads.placements.isNotEmpty) nativeAd = ads.placements.first;
     } catch (_) {}
-    return (comparison: comparison, nativeAd: nativeAd);
+    return _ComparisonPayload(comparison: comparison, nativeAd: nativeAd);
   }
 
   @override
@@ -1463,7 +1475,7 @@ class _ComparisonSheet extends StatelessWidget {
           const SizedBox(height: 12),
           ConstrainedBox(
             constraints: const BoxConstraints(maxHeight: 400),
-            child: FutureBuilder<(_ComparisonPayload)>(
+            child: FutureBuilder<_ComparisonPayload>(
               future: _loadComparisonPayload(),
               builder: (context, snapshot) {
                 if (snapshot.connectionState != ConnectionState.done) {
@@ -1512,10 +1524,28 @@ class _ComparisonSheet extends StatelessWidget {
                         store.name,
                         style: const TextStyle(fontWeight: FontWeight.w600),
                       ),
-                      subtitle: Text(
-                        'Confidence: ${store.confidence}'
-                        '${isBest && comparison.bestSaves != null && comparison.bestSaves! > 0 ? ' · saves ${_formatMoney(comparison.bestSaves!, comparison.currencyCode)}' : ''}',
-                        style: const TextStyle(fontSize: 12),
+                      subtitle: Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Row(
+                          children: [
+                            ConfidenceChip(
+                              confidence: store.confidence,
+                              compact: true,
+                            ),
+                            if (isBest &&
+                                comparison.bestSaves != null &&
+                                comparison.bestSaves! > 0) ...[
+                              const SizedBox(width: 8),
+                              Text(
+                                'saves ${_formatMoney(comparison.bestSaves!, comparison.currencyCode)}',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: ShoppaColors.mist,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
                       ),
                       trailing: Text(
                         _formatMoney(store.total, comparison.currencyCode),
@@ -1558,4 +1588,9 @@ class _InfoBanner extends StatelessWidget {
   }
 }
 
-typedef _ComparisonPayload = ({ShoppaComparison comparison, AdPlacement? nativeAd});
+class _ComparisonPayload {
+  const _ComparisonPayload({required this.comparison, this.nativeAd});
+
+  final ShoppaComparison comparison;
+  final AdPlacement? nativeAd;
+}

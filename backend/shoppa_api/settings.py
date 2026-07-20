@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     "apps.subscriptions",
     "apps.admin_tools",
     "apps.ads",
+    "apps.devices",
     "django_celery_beat",
 ]
 
@@ -184,6 +185,15 @@ if not REDIS_URL:
     CELERY_TASK_ALWAYS_EAGER = True
     CELERY_TASK_EAGER_PROPAGATES = True
 
+# Periodic jobs (M8 scraper; used by celery beat when not using only DB schedules).
+CELERY_BEAT_SCHEDULE = {
+    "scrape-catalogue-prices-hourly": {
+        "task": "price_intelligence.scrape_catalogue_prices",
+        "schedule": 3600.0,
+        "args": ("ZA",),
+    },
+}
+
 # Stripe (Phase 5) — webhook signature secret; empty in dev.
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
@@ -194,11 +204,19 @@ STRIPE_CHECKOUT_CANCEL_URL = os.environ.get(
     "STRIPE_CHECKOUT_CANCEL_URL", "https://app.shoppa.app/subscription/cancel"
 )
 
-# Firebase Cloud Messaging (Phase 2+) — server key for push dispatch.
+# Firebase Cloud Messaging (Phase 2+ / M8) — server key for push dispatch.
 FCM_SERVER_KEY = os.environ.get("FCM_SERVER_KEY", "")
 
-# Launch / ops (M7)
-SHOPPA_RELEASE_VERSION = os.environ.get("SHOPPA_RELEASE_VERSION", "1.0.0")
+# Typesense catalogue search (M8). Empty host = DB fallback only.
+TYPESENSE_HOST = os.environ.get("TYPESENSE_HOST", "")
+TYPESENSE_API_KEY = os.environ.get("TYPESENSE_API_KEY", "shoppa-dev-key")
+
+# Scraper (M8): seed is default/CI; live requires SCRAPER_LIVE_ENABLED=true.
+SCRAPER_MODE = os.environ.get("SCRAPER_MODE", "seed")
+SCRAPER_LIVE_ENABLED = os.environ.get("SCRAPER_LIVE_ENABLED", "False") == "True"
+
+# Launch / ops (M7+)
+SHOPPA_RELEASE_VERSION = os.environ.get("SHOPPA_RELEASE_VERSION", "1.1.0")
 
 # Production hardening when DEBUG is off (staging/prod).
 if not DEBUG:

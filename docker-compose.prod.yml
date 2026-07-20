@@ -43,10 +43,15 @@ services:
       REDIS_URL: redis://redis:6379/0
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-api.shoppa.app}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-https://app.shoppa.app}
-      SHOPPA_RELEASE_VERSION: ${SHOPPA_RELEASE_VERSION:-1.0.0}
+      SHOPPA_RELEASE_VERSION: ${SHOPPA_RELEASE_VERSION:-1.1.0}
       SENTRY_DSN: ${SENTRY_DSN:-}
       SENTRY_ENVIRONMENT: production
       SEED_LAUNCH_DATA: "false"
+      TYPESENSE_HOST: ${TYPESENSE_HOST:-}
+      TYPESENSE_API_KEY: ${TYPESENSE_API_KEY:-}
+      FCM_SERVER_KEY: ${FCM_SERVER_KEY:-}
+      SCRAPER_MODE: ${SCRAPER_MODE:-seed}
+      SCRAPER_LIVE_ENABLED: ${SCRAPER_LIVE_ENABLED:-false}
       LOG_LEVEL: INFO
     depends_on:
       postgres:
@@ -69,6 +74,11 @@ services:
       SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY}
       DATABASE_URL: postgres://${POSTGRES_USER:-shoppa}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-shoppa}
       REDIS_URL: redis://redis:6379/0
+      TYPESENSE_HOST: ${TYPESENSE_HOST:-}
+      TYPESENSE_API_KEY: ${TYPESENSE_API_KEY:-}
+      FCM_SERVER_KEY: ${FCM_SERVER_KEY:-}
+      SCRAPER_MODE: ${SCRAPER_MODE:-seed}
+      SCRAPER_LIVE_ENABLED: ${SCRAPER_LIVE_ENABLED:-false}
       SEED_LAUNCH_DATA: "false"
     depends_on:
       api:
@@ -83,6 +93,7 @@ services:
       SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY}
       DATABASE_URL: postgres://${POSTGRES_USER:-shoppa}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-shoppa}
       REDIS_URL: redis://redis:6379/0
+      SCRAPER_MODE: ${SCRAPER_MODE:-seed}
       SEED_LAUNCH_DATA: "false"
     depends_on:
       api:

@@ -96,8 +96,8 @@ class _MallTabScreenState extends State<MallTabScreen> {
             future: _data,
             builder: (context, snapshot) {
               if (!snapshot.hasData) {
-                return const ListView(
-                  children: [
+                return ListView(
+                  children: const [
                     SizedBox(height: 200, child: Center(child: CircularProgressIndicator())),
                   ],
                 );

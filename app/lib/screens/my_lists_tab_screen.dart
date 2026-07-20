@@ -99,8 +99,10 @@ class _MyListsTabScreenState extends State<MyListsTabScreen> {
           future: _lists,
           builder: (context, snapshot) {
             if (!snapshot.hasData) {
-              return const ListView(
-                children: [SizedBox(height: 200, child: Center(child: CircularProgressIndicator()))],
+              return ListView(
+                children: const [
+                  SizedBox(height: 200, child: Center(child: CircularProgressIndicator())),
+                ],
               );
             }
             final lists = snapshot.data!;

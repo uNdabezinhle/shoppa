@@ -55,6 +55,18 @@ class AuthRepository {
       access: json['access'] as String,
       refresh: json['refresh'] as String,
     );
+    // M8: optional FCM token via --dart-define=FCM_TOKEN=...
+    const fcmToken = String.fromEnvironment('FCM_TOKEN', defaultValue: '');
+    if (fcmToken.isNotEmpty) {
+      try {
+        await _client.post('/devices', {
+          'token': fcmToken,
+          'platform': 'web',
+        });
+      } catch (_) {
+        // Push registration must never block login.
+      }
+    }
     return ShoppaUser.fromJson(json['user'] as Map<String, dynamic>);
   }
 

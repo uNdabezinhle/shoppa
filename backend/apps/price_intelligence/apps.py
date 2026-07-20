@@ -6,3 +6,6 @@ class PriceIntelligenceConfig(AppConfig):
     name = "apps.price_intelligence"
     label = "price_intelligence"
     verbose_name = "Price Intelligence"
+
+    def ready(self):
+        from . import signals  # noqa: F401

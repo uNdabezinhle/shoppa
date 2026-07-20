@@ -15,7 +15,7 @@ class AdminConsoleScreen extends StatefulWidget {
 }
 
 class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
-  late Future<(_AdminPayload)> _data;
+  late Future<_AdminPayload> _data;
   String? _error;
   String? _busyId;
 
@@ -32,10 +32,10 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
     });
   }
 
-  Future<(_AdminPayload)> _load() async {
+  Future<_AdminPayload> _load() async {
     final overview = await widget.adminRepository.fetchOverview();
     final queue = await widget.adminRepository.fetchQuarantineQueue();
-    return (overview: overview, queue: queue);
+    return _AdminPayload(overview: overview, queue: queue);
   }
 
   Future<void> _moderate(String id, String action) async {
@@ -63,7 +63,7 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
       appBar: AppBar(title: const Text('Admin Console')),
       body: RefreshIndicator(
         onRefresh: () async => _reload(),
-        child: FutureBuilder<(_AdminPayload)>(
+        child: FutureBuilder<_AdminPayload>(
           future: _data,
           builder: (context, snapshot) {
             if (snapshot.connectionState != ConnectionState.done) {
@@ -254,4 +254,9 @@ class _StatCard extends StatelessWidget {
   }
 }
 
-typedef _AdminPayload = ({AdminOverview overview, List<QuarantineItem> queue});
+class _AdminPayload {
+  const _AdminPayload({required this.overview, required this.queue});
+
+  final AdminOverview overview;
+  final List<QuarantineItem> queue;
+}

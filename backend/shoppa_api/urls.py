@@ -24,4 +24,5 @@ urlpatterns = [
     path("v1/", include("apps.subscriptions.urls")),
     path("v1/", include("apps.admin_tools.urls")),
     path("v1/", include("apps.ads.urls")),
+    path("v1/", include("apps.devices.urls")),
 ]

@@ -16,7 +16,7 @@ class SubscriptionScreen extends StatefulWidget {
 }
 
 class _SubscriptionScreenState extends State<SubscriptionScreen> {
-  late Future<(_PlansPayload)> _data;
+  late Future<_PlansPayload> _data;
   String? _error;
   String? _busyPlan;
 
@@ -33,10 +33,10 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
     });
   }
 
-  Future<(_PlansPayload)> _load() async {
+  Future<_PlansPayload> _load() async {
     final plans = await widget.subscriptionsRepository.fetchPlans();
     final subscription = await widget.subscriptionsRepository.fetchMySubscription();
-    return (plans: plans, subscription: subscription);
+    return _PlansPayload(plans: plans, subscription: subscription);
   }
 
   String _formatPrice(ShoppaPlan plan) {
@@ -74,7 +74,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
       appBar: AppBar(title: const Text('Plans & Billing')),
       body: RefreshIndicator(
         onRefresh: () async => _reload(),
-        child: FutureBuilder<(_PlansPayload)>(
+        child: FutureBuilder<_PlansPayload>(
           future: _data,
           builder: (context, snapshot) {
             if (snapshot.connectionState != ConnectionState.done) {
@@ -160,7 +160,12 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
   }
 }
 
-typedef _PlansPayload = ({List<ShoppaPlan> plans, ShoppaSubscription subscription});
+class _PlansPayload {
+  const _PlansPayload({required this.plans, required this.subscription});
+
+  final List<ShoppaPlan> plans;
+  final ShoppaSubscription subscription;
+}
 
 class _PlanCard extends StatelessWidget {
   const _PlanCard({
