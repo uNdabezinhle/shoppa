@@ -8,8 +8,10 @@ import '../core/api_client.dart';
 import '../core/catalogue_repository.dart';
 import '../core/list_chat_client.dart';
 import '../core/list_realtime_client.dart';
+import '../core/list_shop_helpers.dart';
 import '../core/lists_repository.dart';
 import '../core/session_summary.dart';
+import '../core/shopping_session_store.dart';
 import '../theme/shoppa_theme.dart';
 import '../widgets/ad_banner.dart';
 import '../widgets/ad_interstitial_sheet.dart';
@@ -65,12 +67,14 @@ class _ListScreenState extends State<ListScreen> {
   final Map<String, String> _activeEditors = {};
   RealtimeConnectionState _connectionState = RealtimeConnectionState.connecting;
   final _realtimeBroadcast = StreamController<ListRealtimeEvent>.broadcast();
-  // SRS FR-5.3/FR-5.4: the store the shopper says they're currently in,
-  // picked from the comparison sheet. Session-only (not persisted) --
-  // once set, it's forwarded on every check-off so the server can record
-  // a price observation (FR-5.4) without asking per item.
+  // SRS FR-5.3/FR-5.4: store the shopper is currently in (comparison sheet).
+  // Persisted per list so it survives leave/restart; cleared via the ✕ chip.
   String? _shoppingAtStoreId;
   String? _shoppingAtStoreName;
+  final ShoppingSessionStore _sessionStore =
+      SharedPreferencesShoppingSessionStore();
+  bool _shopMode = false;
+  bool _dismissedStoreNudge = false;
 
   @override
   void initState() {
@@ -79,6 +83,7 @@ class _ListScreenState extends State<ListScreen> {
     _listBanner = _loadListBanner();
     _list = _loadAndSync();
     _list.then((_) => _refreshPendingCount(), onError: (_) {});
+    _restoreShoppingAtStore();
     // SRS FR-3.2: any item/collaborator change from another collaborator
     // triggers an immediate refetch, rather than waiting for a manual
     // pull-to-refresh -- this is deliberately a full refetch (not
@@ -392,7 +397,7 @@ class _ListScreenState extends State<ListScreen> {
                 ),
                 const SizedBox(width: 12),
                 Expanded(child: _itemDetails(item)),
-                if (list.canEdit)
+                if (list.canEdit && !_shopMode)
                   IconButton(
                     icon: const Icon(Icons.edit_outlined, size: 20),
                     color: ShoppaColors.mist,
@@ -606,10 +611,18 @@ class _ListScreenState extends State<ListScreen> {
     );
   }
 
+  Future<void> _restoreShoppingAtStore() async {
+    final saved = await _sessionStore.getShoppingAt(widget.listId);
+    if (!mounted || saved == null) return;
+    setState(() {
+      _shoppingAtStoreId = saved.storeId;
+      _shoppingAtStoreName = saved.storeName;
+    });
+  }
+
   /// SRS FR-5.3: shows per-store totals for this list. Tapping a store
-  /// sets it as "shopping at" for the rest of this session (SRS FR-5.4),
-  /// so subsequent check-offs implicitly submit a price observation for
-  /// that store without asking per item.
+  /// sets it as "shopping at" (SRS FR-5.4), so subsequent check-offs
+  /// submit a price observation for that store without asking per item.
   Future<void> _openComparisonSheet() async {
     final selected = await showModalBottomSheet<ShoppaStoreComparison>(
       context: context,
@@ -624,17 +637,28 @@ class _ListScreenState extends State<ListScreen> {
     setState(() {
       _shoppingAtStoreId = selected.storeId;
       _shoppingAtStoreName = selected.name;
+      _dismissedStoreNudge = true;
     });
+    await _sessionStore.setShoppingAt(
+      widget.listId,
+      ShoppingAtStore(storeId: selected.storeId, storeName: selected.name),
+    );
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Shopping at ${selected.name}')),
     );
   }
 
-  void _clearShoppingAtStore() {
+  Future<void> _clearShoppingAtStore() async {
     setState(() {
       _shoppingAtStoreId = null;
       _shoppingAtStoreName = null;
     });
+    await _sessionStore.clearShoppingAt(widget.listId);
+  }
+
+  void _toggleShopMode() {
+    setState(() => _shopMode = !_shopMode);
   }
 
   /// SRS FR-4.4: a session summary of spend (and, once price_intelligence
@@ -670,7 +694,7 @@ class _ListScreenState extends State<ListScreen> {
     await showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Session summary'),
+        title: Text(summary.isComplete ? 'Trip complete' : 'Session summary'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -713,9 +737,104 @@ class _ListScreenState extends State<ListScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Close'),
+            child: const Text('Keep shopping'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Done'),
           ),
         ],
+      ),
+    );
+  }
+
+  Future<void> _onOverflowAction(String value, ShoppaList? list) async {
+    if (value == 'compare') {
+      await _openComparisonSheet();
+    } else if (value == 'chat') {
+      _openChatSheet();
+    } else if (value == 'activity') {
+      _openActivitySheet();
+    } else if (value == 'share') {
+      if (list != null) _openShareSheet(list);
+    } else if (value == 'export_csv') {
+      await _exportList('csv');
+    } else if (value == 'export_pdf') {
+      await _exportList('pdf');
+    } else if (value == 'scale') {
+      await _scaleForGuests();
+    } else if (value == 'publish') {
+      if (list != null) await _togglePublish(list);
+    }
+  }
+
+  Widget _buildProgressStrip(ShoppaList list, ListProgress progress) {
+    if (!progress.hasItems) return const SizedBox.shrink();
+    final canTap = progress.checked > 0;
+    return Material(
+      color: ShoppaColors.panel2.withOpacity(0.45),
+      child: InkWell(
+        onTap: canTap ? () => _openSessionSummary(list) : null,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${progress.checked} of ${progress.total} checked'
+                      ' · ${progress.percent}%',
+                      style: const TextStyle(
+                        color: ShoppaColors.ink,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  if (progress.remaining > 0)
+                    Text(
+                      '${progress.remaining} left',
+                      style: const TextStyle(
+                        color: ShoppaColors.mist,
+                        fontSize: 12,
+                      ),
+                    )
+                  else
+                    const Text(
+                      'All done',
+                      style: TextStyle(
+                        color: ShoppaColors.green,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  if (canTap) ...[
+                    const SizedBox(width: 6),
+                    const Icon(
+                      Icons.receipt_long_outlined,
+                      size: 16,
+                      color: ShoppaColors.mist,
+                    ),
+                  ],
+                ],
+              ),
+              const SizedBox(height: 8),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  value: progress.fraction,
+                  minHeight: 6,
+                  backgroundColor: ShoppaColors.line,
+                  color: progress.isComplete
+                      ? ShoppaColors.green
+                      : ShoppaColors.amber,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -724,8 +843,15 @@ class _ListScreenState extends State<ListScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.title),
+        title: Text(_shopMode ? 'Shopping · ${widget.title}' : widget.title),
         actions: [
+          IconButton(
+            tooltip: _shopMode ? 'Exit shop mode' : 'Shop mode',
+            icon: Icon(
+              _shopMode ? Icons.shopping_cart : Icons.shopping_cart_outlined,
+            ),
+            onPressed: _toggleShopMode,
+          ),
           FutureBuilder<ShoppaList>(
             future: _list,
             builder: (context, snapshot) {
@@ -738,70 +864,69 @@ class _ListScreenState extends State<ListScreen> {
               );
             },
           ),
-          IconButton(
-            tooltip: 'Chat',
-            icon: const Icon(Icons.chat_bubble_outline),
-            onPressed: _openChatSheet,
-          ),
-          IconButton(
-            tooltip: 'Activity',
-            icon: const Icon(Icons.history),
-            onPressed: _openActivitySheet,
-          ),
-          IconButton(
-            tooltip: 'Compare prices',
-            icon: const Icon(Icons.storefront_outlined),
-            onPressed: _openComparisonSheet,
-          ),
+          if (!_shopMode)
+            IconButton(
+              tooltip: 'Compare prices',
+              icon: const Icon(Icons.storefront_outlined),
+              onPressed: _openComparisonSheet,
+            ),
           FutureBuilder<ShoppaList>(
             future: _list,
             builder: (context, snapshot) {
               final list = snapshot.data;
-              return IconButton(
-                tooltip: 'Share',
-                icon: const Icon(Icons.people_outline),
-                onPressed:
-                    list == null ? null : () => _openShareSheet(list),
+              return PopupMenuButton<String>(
+                tooltip: 'More',
+                onSelected: (value) => _onOverflowAction(value, list),
+                itemBuilder: (context) {
+                  final items = <PopupMenuEntry<String>>[
+                    if (_shopMode)
+                      const PopupMenuItem(
+                        value: 'compare',
+                        child: Text('Compare / set store'),
+                      ),
+                    const PopupMenuItem(
+                      value: 'chat',
+                      child: Text('Chat'),
+                    ),
+                    const PopupMenuItem(
+                      value: 'activity',
+                      child: Text('Activity'),
+                    ),
+                    const PopupMenuItem(
+                      value: 'share',
+                      child: Text('Share'),
+                    ),
+                    const PopupMenuItem(
+                      value: 'export_csv',
+                      child: Text('Export CSV'),
+                    ),
+                    const PopupMenuItem(
+                      value: 'export_pdf',
+                      child: Text('Export PDF'),
+                    ),
+                  ];
+                  if (_isProfessional && list != null && list.isOwner) {
+                    items.addAll([
+                      const PopupMenuDivider(),
+                      const PopupMenuItem(
+                        value: 'scale',
+                        child: Text('Scale for guests'),
+                      ),
+                      PopupMenuItem(
+                        value: 'publish',
+                        child: Text(
+                          list.isPublic
+                              ? 'Unpublish list'
+                              : 'Publish publicly',
+                        ),
+                      ),
+                    ]);
+                  }
+                  return items;
+                },
               );
             },
           ),
-          PopupMenuButton<String>(
-            tooltip: 'Export list',
-            onSelected: _exportList,
-            itemBuilder: (context) => const [
-              PopupMenuItem(value: 'csv', child: Text('Export CSV')),
-              PopupMenuItem(value: 'pdf', child: Text('Export PDF')),
-            ],
-          ),
-          if (_isProfessional)
-            FutureBuilder<ShoppaList>(
-              future: _list,
-              builder: (context, snapshot) {
-                final list = snapshot.data;
-                if (list == null || !list.isOwner) {
-                  return const SizedBox.shrink();
-                }
-                return PopupMenuButton<String>(
-                  tooltip: 'Professional tools',
-                  onSelected: (value) {
-                    if (value == 'scale') _scaleForGuests();
-                    if (value == 'publish') _togglePublish(list);
-                  },
-                  itemBuilder: (context) => [
-                    const PopupMenuItem(
-                      value: 'scale',
-                      child: Text('Scale for guests'),
-                    ),
-                    PopupMenuItem(
-                      value: 'publish',
-                      child: Text(
-                        list.isPublic ? 'Unpublish list' : 'Publish publicly',
-                      ),
-                    ),
-                  ],
-                );
-              },
-            ),
         ],
       ),
       body: FutureBuilder<ShoppaList>(
@@ -819,16 +944,26 @@ class _ListScreenState extends State<ListScreen> {
             );
           }
           final list = snapshot.data!;
-          final items = list.items ?? [];
+          final rawItems = list.items ?? [];
+          final progress = listProgress(rawItems);
+          final items = itemsForDisplay(rawItems, shopMode: _shopMode);
+          final showStoreNudge = !_dismissedStoreNudge &&
+              list.canEdit &&
+              rawItems.isNotEmpty &&
+              _shoppingAtStoreName == null;
+          final allowReorder = list.canEdit && !_shopMode;
           return Column(
             children: [
-              PresenceBanner(
-                editorEmails: _activeEditors.values.toList(),
-                connected: _connectionState == RealtimeConnectionState.connected,
-              ),
+              if (!_shopMode)
+                PresenceBanner(
+                  editorEmails: _activeEditors.values.toList(),
+                  connected:
+                      _connectionState == RealtimeConnectionState.connected,
+                ),
               if (list.fromCache)
                 _InfoBanner(
-                  text: 'Offline — showing the last synced version of this list.',
+                  text:
+                      'Offline — showing the last synced version of this list.',
                   color: ShoppaColors.amber,
                 )
               else if (_pendingCount > 0)
@@ -838,27 +973,65 @@ class _ListScreenState extends State<ListScreen> {
                       : '$_pendingCount changes waiting to sync.',
                   color: ShoppaColors.amber,
                 ),
-              if (!list.isOwner)
+              if (!list.isOwner && !_shopMode)
                 _InfoBanner(
                   text: list.canEdit
                       ? 'Shared with you — you can edit this list.'
                       : 'Shared with you — view only.',
                   color: ShoppaColors.mist,
                 ),
-              FutureBuilder<AdPlacement?>(
-                future: _listBanner,
-                builder: (context, adSnapshot) {
-                  final banner = adSnapshot.data;
-                  if (banner == null) return const SizedBox.shrink();
-                  return Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                    child: AdBanner(
-                      placement: banner,
-                      adsRepository: widget.adsRepository,
+              _buildProgressStrip(list, progress),
+              if (showStoreNudge)
+                Material(
+                  color: ShoppaColors.amber.withOpacity(0.12),
+                  child: InkWell(
+                    onTap: _openComparisonSheet,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 10,
+                      ),
+                      child: Row(
+                        children: [
+                          const Expanded(
+                            child: Text(
+                              'Set store for better price suggestions',
+                              style: TextStyle(
+                                color: ShoppaColors.ink,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                          GestureDetector(
+                            onTap: () =>
+                                setState(() => _dismissedStoreNudge = true),
+                            child: const Icon(
+                              Icons.close,
+                              size: 16,
+                              color: ShoppaColors.mist,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  );
-                },
-              ),
+                  ),
+                ),
+              if (!_shopMode)
+                FutureBuilder<AdPlacement?>(
+                  future: _listBanner,
+                  builder: (context, adSnapshot) {
+                    final banner = adSnapshot.data;
+                    if (banner == null) return const SizedBox.shrink();
+                    return Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                      child: AdBanner(
+                        placement: banner,
+                        adsRepository: widget.adsRepository,
+                      ),
+                    );
+                  },
+                ),
               if (_shoppingAtStoreName != null)
                 Container(
                   width: double.infinity,
@@ -879,8 +1052,11 @@ class _ListScreenState extends State<ListScreen> {
                       ),
                       GestureDetector(
                         onTap: _clearShoppingAtStore,
-                        child: const Icon(Icons.close,
-                            size: 16, color: ShoppaColors.mist),
+                        child: const Icon(
+                          Icons.close,
+                          size: 16,
+                          color: ShoppaColors.mist,
+                        ),
                       ),
                     ],
                   ),
@@ -893,7 +1069,7 @@ class _ListScreenState extends State<ListScreen> {
                           style: TextStyle(color: ShoppaColors.mist),
                         ),
                       )
-                    : list.canEdit
+                    : allowReorder
                         ? ReorderableListView.builder(
                             padding: const EdgeInsets.all(16),
                             buildDefaultDragHandles: false,
@@ -924,6 +1100,11 @@ class _ListScreenState extends State<ListScreen> {
                                 item: item,
                                 list: list,
                                 index: index,
+                                onDismissed: list.canEdit && !_shopMode
+                                    ? () => widget.listsRepository
+                                        .deleteItem(widget.listId, item.id)
+                                        .then((_) => _reload())
+                                    : null,
                               );
                             },
                           ),
@@ -936,7 +1117,9 @@ class _ListScreenState extends State<ListScreen> {
         future: _list,
         builder: (context, snapshot) {
           final list = snapshot.data;
-          if (list == null || !list.canEdit) return const SizedBox.shrink();
+          if (list == null || !list.canEdit || _shopMode) {
+            return const SizedBox.shrink();
+          }
           return FloatingActionButton(
             onPressed: _addItem,
             backgroundColor: ShoppaColors.amber,
