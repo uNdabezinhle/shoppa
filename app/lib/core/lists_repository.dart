@@ -9,6 +9,35 @@ import 'dart:typed_data';
 import 'api_client.dart';
 import 'offline_store.dart';
 
+/// Input row for [ListsRepository.addItemsBulk].
+class BulkItemInput {
+  const BulkItemInput({
+    required this.name,
+    this.quantity = 1,
+    this.unit = 'ea',
+    this.note = '',
+    this.productId,
+  });
+
+  final String name;
+  final num quantity;
+  final String unit;
+  final String note;
+  final String? productId;
+}
+
+class BulkAddResult {
+  const BulkAddResult({
+    required this.created,
+    required this.failedCount,
+  });
+
+  final List<ShoppaListItem> created;
+  final int failedCount;
+
+  int get addedCount => created.length;
+}
+
 class ShoppaListItem {
   ShoppaListItem({
     required this.id,
@@ -19,6 +48,7 @@ class ShoppaListItem {
     required this.checked,
     this.productId,
     this.paidPrice,
+    this.position = 0,
     this.hasPromotion = false,
   });
 
@@ -31,6 +61,7 @@ class ShoppaListItem {
         checked: json['checked'] as bool? ?? false,
         productId: json['product_id'] as String?,
         paidPrice: json['paid_price'] as int?,
+        position: (json['position'] as num?)?.toInt() ?? 0,
         hasPromotion: json['has_promotion'] as bool? ?? false,
       );
 
@@ -42,6 +73,8 @@ class ShoppaListItem {
   final bool checked;
   final String? productId;
   final int? paidPrice;
+  /// Server sort key (API `position`); used for realtime reorder patches.
+  final int position;
   /// SRS FR-7.2: a live, non-opted-out promotion matches this item's
   /// product. False for free-text items (no product_id) by definition.
   final bool hasPromotion;
@@ -112,46 +145,59 @@ class ShoppaList {
     required this.category,
     required this.isRecurring,
     required this.itemCount,
+    this.checkedCount = 0,
     this.isPublic = false,
     this.eventName = '',
     this.eventDate,
+    this.updatedAt,
     this.role,
     this.collaborators = const [],
     this.items,
     this.fromCache = false,
   });
 
-  factory ShoppaList.fromJson(Map<String, dynamic> json, {bool fromCache = false}) =>
-      ShoppaList(
-        id: json['id'] as String,
-        title: json['title'] as String,
-        category: json['category'] as String,
-        isRecurring: json['is_recurring'] as bool? ?? false,
-        itemCount: json['item_count'] as int? ?? 0,
-        isPublic: json['is_public'] as bool? ?? false,
-        eventName: json['event_name'] as String? ?? '',
-        eventDate: json['event_date'] as String?,
-        role: json['role'] as String?,
-        collaborators: (json['collaborators'] as List? ?? [])
-            .map((e) =>
-                ShoppaCollaboratorPreview.fromJson(e as Map<String, dynamic>))
-            .toList(),
-        items: json['items'] != null
-            ? (json['items'] as List)
-                .map((e) => ShoppaListItem.fromJson(e as Map<String, dynamic>))
-                .toList()
-            : null,
-        fromCache: fromCache,
-      );
+  factory ShoppaList.fromJson(Map<String, dynamic> json, {bool fromCache = false}) {
+    final items = json['items'] != null
+        ? (json['items'] as List)
+            .map((e) => ShoppaListItem.fromJson(e as Map<String, dynamic>))
+            .toList()
+        : null;
+    final itemCount = json['item_count'] as int? ?? items?.length ?? 0;
+    final checkedFromItems =
+        items == null ? null : items.where((i) => i.checked).length;
+    return ShoppaList(
+      id: json['id'] as String,
+      title: json['title'] as String,
+      category: json['category'] as String,
+      isRecurring: json['is_recurring'] as bool? ?? false,
+      itemCount: itemCount,
+      checkedCount: json['checked_count'] as int? ?? checkedFromItems ?? 0,
+      isPublic: json['is_public'] as bool? ?? false,
+      eventName: json['event_name'] as String? ?? '',
+      eventDate: json['event_date'] as String?,
+      updatedAt: json['updated_at'] as String?,
+      role: json['role'] as String?,
+      collaborators: (json['collaborators'] as List? ?? [])
+          .map((e) =>
+              ShoppaCollaboratorPreview.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      items: items,
+      fromCache: fromCache,
+    );
+  }
 
   final String id;
   final String title;
   final String category;
   final bool isRecurring;
   final int itemCount;
+  /// How many items are checked off (list index / detail).
+  final int checkedCount;
   final bool isPublic;
   final String eventName;
   final String? eventDate;
+  /// ISO timestamp from the API; used for "recent" sort on My Lists.
+  final String? updatedAt;
   final List<ShoppaCollaboratorPreview> collaborators;
   /// "owner", "edit", or "view" (API Specification role field, SRS
   /// FR-3.1) -- null only if the server response omitted it.
@@ -163,25 +209,42 @@ class ShoppaList {
 
   bool get canEdit => role == 'owner' || role == 'edit';
   bool get isOwner => role == 'owner';
+
+  DateTime? get updatedAtDate {
+    final raw = updatedAt;
+    if (raw == null || raw.isEmpty) return null;
+    return DateTime.tryParse(raw);
+  }
 }
 
 class ShoppaCollaborator {
   ShoppaCollaborator({
-    required this.userId,
+    required this.id,
+    this.userId,
     required this.userEmail,
     required this.permission,
+    this.status = 'active',
   });
 
   factory ShoppaCollaborator.fromJson(Map<String, dynamic> json) =>
       ShoppaCollaborator(
-        userId: json['user_id'] as String,
-        userEmail: json['user_email'] as String,
+        id: json['id'] as String? ?? json['user_id'] as String? ?? '',
+        userId: json['user_id'] as String?,
+        userEmail: json['user_email'] as String? ?? '',
         permission: json['permission'] as String,
+        status: json['status'] as String? ?? 'active',
       );
 
-  final String userId;
+  /// Collaborator row id, or pending invite id.
+  final String id;
+  /// Null when [status] is `pending` (invite not yet accepted).
+  final String? userId;
   final String userEmail;
   final String permission;
+  /// `active` (registered collaborator) or `pending` (email invite).
+  final String status;
+
+  bool get isPending => status == 'pending';
 }
 
 class ShoppaActivityEntry {
@@ -299,10 +362,21 @@ class ListsRepository {
     try {
       final json = await _client.get('/lists') as Map<String, dynamic>;
       final results = json['results'] as List;
-      final maps = results
+      var maps = results
           .map((e) => Map<String, dynamic>.from(e as Map))
           .toList(growable: false);
       await _offlineStore.cacheListsIndex(maps);
+      // FR-4.2: flush offline queues for every list as soon as we have
+      // connectivity — without requiring the user to open each detail.
+      final synced = await syncAllPending();
+      if (synced > 0) {
+        final refreshed =
+            await _client.get('/lists') as Map<String, dynamic>;
+        maps = (refreshed['results'] as List)
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList(growable: false);
+        await _offlineStore.cacheListsIndex(maps);
+      }
       return maps
           .map((e) => ShoppaList.fromJson(e))
           .toList(growable: false);
@@ -334,12 +408,18 @@ class ListsRepository {
     required String title,
     String category = 'custom',
     bool isRecurring = false,
+    String? eventName,
+    String? eventDate,
   }) async {
-    final json = await _client.post('/lists', {
+    final body = <String, dynamic>{
       'title': title,
       'category': category,
       'is_recurring': isRecurring,
-    }, authenticated: true) as Map<String, dynamic>;
+    };
+    if (eventName != null) body['event_name'] = eventName;
+    if (eventDate != null) body['event_date'] = eventDate;
+    final json = await _client.post('/lists', body, authenticated: true)
+        as Map<String, dynamic>;
     return ShoppaList.fromJson(json);
   }
 
@@ -367,6 +447,80 @@ class ListsRepository {
       return ShoppaListItem.fromJson(json);
     } on NetworkUnavailableException {
       return _queueAddItem(listId, payload);
+    }
+  }
+
+  /// One row for [addItemsBulk] (paste / import / multi-add).
+  /// Offline falls back to per-item [addItem] queueing.
+  Future<BulkAddResult> addItemsBulk(
+    String listId,
+    List<BulkItemInput> items,
+  ) async {
+    if (items.isEmpty) {
+      return const BulkAddResult(created: [], failedCount: 0);
+    }
+    final payload = {
+      'items': items
+          .map(
+            (i) => <String, dynamic>{
+              'name': i.name,
+              'quantity': i.quantity,
+              'unit': i.unit,
+              'note': i.note,
+              if (i.productId != null) 'product_id': i.productId,
+            },
+          )
+          .toList(),
+    };
+    try {
+      final json = await _client.post(
+        '/lists/$listId/items/bulk',
+        payload,
+        authenticated: true,
+      ) as Map<String, dynamic>;
+      final created = (json['items'] as List? ?? [])
+          .map((e) => ShoppaListItem.fromJson(e as Map<String, dynamic>))
+          .toList();
+      final errors = json['errors'] as List? ?? const [];
+      for (final item in created) {
+        await _appendItemToCache(listId, {
+          'id': item.id,
+          'product_id': item.productId,
+          'name': item.name,
+          'quantity': item.quantity.toString(),
+          'unit': item.unit,
+          'note': item.note,
+          'checked': item.checked,
+          'paid_price': item.paidPrice,
+          'position': item.position,
+          'has_promotion': item.hasPromotion,
+          'created_at': DateTime.now().toUtc().toIso8601String(),
+        });
+      }
+      return BulkAddResult(
+        created: created,
+        failedCount: errors.length,
+      );
+    } on NetworkUnavailableException {
+      final created = <ShoppaListItem>[];
+      var failed = 0;
+      for (final item in items) {
+        try {
+          created.add(
+            await addItem(
+              listId,
+              name: item.name,
+              quantity: item.quantity,
+              unit: item.unit,
+              note: item.note,
+              productId: item.productId,
+            ),
+          );
+        } catch (_) {
+          failed++;
+        }
+      }
+      return BulkAddResult(created: created, failedCount: failed);
     }
   }
 
@@ -502,6 +656,7 @@ class ListsRepository {
     String? unit,
     String? note,
     int? position,
+    String? productId,
     DateTime? clientUpdatedAt,
   }) async {
     final now = clientUpdatedAt ?? DateTime.now().toUtc();
@@ -511,6 +666,7 @@ class ListsRepository {
     if (unit != null) body['unit'] = unit;
     if (note != null) body['note'] = note;
     if (position != null) body['position'] = position;
+    if (productId != null) body['product_id'] = productId;
     if (clientUpdatedAt != null) {
       body['client_updated_at'] = now.toIso8601String();
     }
@@ -603,8 +759,28 @@ class ListsRepository {
     return synced;
   }
 
+  /// Replays pending offline mutations for every list that has a queue
+  /// (SRS FR-4.2 background sync). Processes lists in first-seen order.
+  Future<int> syncAllPending() async {
+    final all = await _offlineStore.pendingAll();
+    if (all.isEmpty) return 0;
+    final listIds = <String>[];
+    for (final m in all) {
+      if (!listIds.contains(m.listId)) listIds.add(m.listId);
+    }
+    var total = 0;
+    for (final listId in listIds) {
+      total += await syncPending(listId);
+    }
+    return total;
+  }
+
   Future<int> pendingCount(String listId) async {
     return (await _offlineStore.pendingFor(listId)).length;
+  }
+
+  Future<int> pendingCountAll() async {
+    return (await _offlineStore.pendingAll()).length;
   }
 
   Future<ShoppaListItem> _queueAddItem(
@@ -836,6 +1012,11 @@ class ListsRepository {
 
   Future<void> removeCollaborator(String listId, String userId) {
     return _client.delete('/lists/$listId/collaborators/$userId');
+  }
+
+  /// Owner: cancel a pending email invite (unregistered recipient).
+  Future<void> cancelInvite(String listId, String inviteId) {
+    return _client.delete('/lists/$listId/invites/$inviteId');
   }
 
   /// Owner: change collaborator view/edit permission.

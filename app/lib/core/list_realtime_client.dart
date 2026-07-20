@@ -1,7 +1,10 @@
 /// Real-time list collaboration (SRS FR-3.2, API Specification §9:
-/// ws /lists/{id}). Server -> client only: item.*, collaborator.*,
-/// presence.joined, presence.left. The client's job on list mutations
-/// is to refetch; presence events update the live-editing banner.
+/// ws /lists/{id}). Server -> client only: item.*, list.scaled,
+/// collaborator.*, presence.joined, presence.left.
+///
+/// Item and scale events are applied incrementally via
+/// [applyListRealtimeEvent]; collaborator events still trigger a full
+/// REST detail refetch. Presence updates the live-editing banner.
 import 'dart:async';
 import 'dart:convert';
 

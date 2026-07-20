@@ -88,8 +88,8 @@ class ListItem(models.Model):
     list = models.ForeignKey(
         ShoppingList, on_delete=models.CASCADE, related_name="items"
     )
-    # product_id is a placeholder FK-by-UUID to the future catalogue
-    # (price_intelligence app, Phase 3); free-text name works until then.
+    # Optional catalogue link (price_intelligence.Product.id). Not a DB FK
+    # so free-text items stay simple; serializer validates existence/region.
     product_id = models.UUIDField(null=True, blank=True)
     name = models.CharField(max_length=200)
     quantity = models.DecimalField(max_digits=10, decimal_places=2, default=1)
@@ -181,6 +181,42 @@ class ListCollaborator(models.Model):
         return f"{self.user} on {self.list} ({self.permission})"
 
 
+class ListInvite(models.Model):
+    """Pending share for an email that is not yet a Shoppa user (FR-3.1).
+
+    Converted to a ListCollaborator when that email registers. Cancelled
+    via DELETE /lists/{id}/invites/{invite_id}.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    list = models.ForeignKey(
+        ShoppingList, on_delete=models.CASCADE, related_name="invites"
+    )
+    email = models.EmailField(db_index=True)
+    permission = models.CharField(
+        max_length=10,
+        choices=CollaboratorPermission.choices,
+        default=CollaboratorPermission.VIEW,
+    )
+    invited_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="list_invites_sent",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["list", "email"], name="unique_list_invite_email"
+            )
+        ]
+
+    def __str__(self):
+        return f"invite {self.email} on {self.list} ({self.permission})"
+
+
 class ListActivityAction(models.TextChoices):
     ITEM_ADDED = "item_added", "Item added"
     ITEM_UPDATED = "item_updated", "Item updated"
@@ -189,6 +225,10 @@ class ListActivityAction(models.TextChoices):
     COLLABORATOR_JOINED = "collaborator_joined", "Collaborator joined"
     COLLABORATOR_REMOVED = "collaborator_removed", "Collaborator removed"
     LIST_SCALED = "list_scaled", "List scaled"
+    LIST_CREATED = "list_created", "List created"
+    LIST_UPDATED = "list_updated", "List updated"
+    LIST_PUBLISHED = "list_published", "List published"
+    LIST_UNPUBLISHED = "list_unpublished", "List unpublished"
 
 
 class ListActivity(models.Model):

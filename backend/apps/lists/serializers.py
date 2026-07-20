@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import ListActivity, ListCollaborator, ListItem, ShoppingList
+from .models import ListActivity, ListCollaborator, ListInvite, ListItem, ShoppingList
 from .presence import email_initials
 
 
@@ -40,6 +40,26 @@ class ListItemSerializer(serializers.ModelSerializer):
 
         return has_active_promotion(user, obj.product_id)
 
+    def validate_product_id(self, value):
+        """Reject unknown or wrong-region catalogue IDs (loose UUID, not FK)."""
+        if value is None:
+            return value
+        from apps.price_intelligence.models import Product
+
+        product = Product.objects.filter(pk=value).first()
+        if product is None:
+            raise serializers.ValidationError(
+                "No catalogue product matches this product_id."
+            )
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        region = getattr(user, "region", None) or "ZA"
+        if product.region != region:
+            raise serializers.ValidationError(
+                f"Product is not available in region {region}."
+            )
+        return value
+
     def create(self, validated_data):
         validated_data.pop("client_updated_at", None)
         validated_data.pop("store_id", None)
@@ -62,7 +82,8 @@ class CollaboratorPreviewSerializer(serializers.Serializer):
 
 
 class ShoppingListSerializer(serializers.ModelSerializer):
-    item_count = serializers.IntegerField(source="items.count", read_only=True)
+    item_count = serializers.SerializerMethodField()
+    checked_count = serializers.SerializerMethodField()
     role = serializers.SerializerMethodField()
     collaborators = serializers.SerializerMethodField()
 
@@ -71,13 +92,25 @@ class ShoppingListSerializer(serializers.ModelSerializer):
         fields = [
             "id", "title", "category", "is_recurring", "recurrence",
             "is_public", "event_name", "event_date",
-            "item_count", "role", "collaborators",
+            "item_count", "checked_count", "role", "collaborators",
             "created_at", "updated_at",
         ]
         read_only_fields = [
-            "id", "item_count", "role", "collaborators",
+            "id", "item_count", "checked_count", "role", "collaborators",
             "created_at", "updated_at",
         ]
+
+    def get_item_count(self, obj):
+        annotated = getattr(obj, "annotated_item_count", None)
+        if annotated is not None:
+            return annotated
+        return obj.items.count()
+
+    def get_checked_count(self, obj):
+        annotated = getattr(obj, "annotated_checked_count", None)
+        if annotated is not None:
+            return annotated
+        return obj.items.filter(checked=True).count()
 
     def get_role(self, obj):
         request = self.context.get("request")
@@ -146,29 +179,56 @@ class ShoppingListDetailSerializer(ShoppingListSerializer):
 class ListCollaboratorSerializer(serializers.ModelSerializer):
     """Write side accepts an `email` (API Specification §6.3); read side
     also surfaces the resolved user's id/email so clients don't need a
-    separate lookup.
+    separate lookup. Unknown emails become pending ListInvite rows
+    (status=pending) rather than a hard error.
     """
 
     email = serializers.EmailField(write_only=True)
     user_id = serializers.UUIDField(source="user.id", read_only=True)
     user_email = serializers.EmailField(source="user.email", read_only=True)
+    status = serializers.SerializerMethodField()
 
     class Meta:
         model = ListCollaborator
-        fields = ["id", "email", "user_id", "user_email", "permission", "created_at"]
-        read_only_fields = ["id", "user_id", "user_email", "created_at"]
+        fields = [
+            "id",
+            "email",
+            "user_id",
+            "user_email",
+            "permission",
+            "created_at",
+            "status",
+        ]
+        read_only_fields = [
+            "id",
+            "user_id",
+            "user_email",
+            "created_at",
+            "status",
+        ]
+
+    def get_status(self, obj):
+        return "active"
 
     def validate(self, attrs):
         from apps.users.models import User
 
+        from .invite_services import normalize_email
+
         list_obj = self.context["list"]
-        email = attrs.get("email")
+        email = normalize_email(attrs.get("email") or "")
+        attrs["email"] = email
         try:
             user = User.objects.get(email__iexact=email)
         except User.DoesNotExist:
-            raise serializers.ValidationError(
-                {"email": "No user with this email exists."}
-            )
+            # Pending invite path — view creates ListInvite.
+            if list_obj.owner and list_obj.owner.email.lower() == email:
+                raise serializers.ValidationError(
+                    {"email": "Cannot share a list with its owner."}
+                )
+            attrs["_user"] = None
+            attrs["_pending"] = True
+            return attrs
         if user.id == list_obj.owner_id:
             raise serializers.ValidationError(
                 {"email": "Cannot share a list with its owner."}
@@ -178,13 +238,41 @@ class ListCollaboratorSerializer(serializers.ModelSerializer):
                 {"email": "This user is already a collaborator."}
             )
         attrs["_user"] = user
+        attrs["_pending"] = False
         return attrs
 
     def create(self, validated_data):
         validated_data.pop("email", None)
+        validated_data.pop("_pending", None)
         validated_data["user"] = validated_data.pop("_user")
         validated_data["list"] = self.context["list"]
         return ListCollaborator.objects.create(**validated_data)
+
+
+class ListInviteSerializer(serializers.ModelSerializer):
+    """Pending invite row — same shape as an active collaborator for clients."""
+
+    user_id = serializers.SerializerMethodField()
+    user_email = serializers.EmailField(source="email", read_only=True)
+    status = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ListInvite
+        fields = [
+            "id",
+            "user_id",
+            "user_email",
+            "permission",
+            "created_at",
+            "status",
+        ]
+        read_only_fields = fields
+
+    def get_user_id(self, obj):
+        return None
+
+    def get_status(self, obj):
+        return "pending"
 
 
 class ListActivitySerializer(serializers.ModelSerializer):

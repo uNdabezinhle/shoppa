@@ -50,4 +50,8 @@ class RegisterSerializer(serializers.ModelSerializer):
         user = User(username=validated_data["email"], **validated_data)
         user.set_password(password)
         user.save()
+        # FR-3.1: convert pending list invites for this email into collabs.
+        from apps.lists.invite_services import accept_pending_invites
+
+        accept_pending_invites(user)
         return user

@@ -1,5 +1,17 @@
 import 'package:flutter/material.dart';
 
+/// Common grocery units for quick-pick chips.
+const kCommonItemUnits = <String>[
+  'ea',
+  'pcs',
+  'kg',
+  'g',
+  'l',
+  'ml',
+  'pack',
+  'bunch',
+];
+
 Future<Map<String, dynamic>?> showItemFormDialog(
   BuildContext context, {
   String? initialName,
@@ -16,63 +28,93 @@ Future<Map<String, dynamic>?> showItemFormDialog(
 
   return showDialog<Map<String, dynamic>>(
     context: context,
-    builder: (ctx) => AlertDialog(
-      title: Text(title),
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: nameController,
-              decoration: const InputDecoration(labelText: 'Name'),
-              autofocus: true,
-            ),
-            const SizedBox(height: 8),
-            Row(
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setLocal) {
+        final unit = unitController.text.trim().isEmpty
+            ? 'ea'
+            : unitController.text.trim();
+        return AlertDialog(
+          title: Text(title),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: TextField(
-                    controller: qtyController,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(labelText: 'Qty'),
-                  ),
+                TextField(
+                  controller: nameController,
+                  decoration: const InputDecoration(labelText: 'Name'),
+                  autofocus: true,
                 ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: TextField(
-                    controller: unitController,
-                    decoration: const InputDecoration(labelText: 'Unit'),
-                  ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: qtyController,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        decoration: const InputDecoration(labelText: 'Qty'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextField(
+                        controller: unitController,
+                        decoration: const InputDecoration(labelText: 'Unit'),
+                        onChanged: (_) => setLocal(() {}),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    for (final u in kCommonItemUnits)
+                      ChoiceChip(
+                        label: Text(u),
+                        selected: unit.toLowerCase() == u.toLowerCase(),
+                        onSelected: (_) {
+                          unitController.text = u;
+                          setLocal(() {});
+                        },
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: noteController,
+                  decoration: const InputDecoration(labelText: 'Note'),
                 ),
               ],
             ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: noteController,
-              decoration: const InputDecoration(labelText: 'Note'),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final name = nameController.text.trim();
+                if (name.isEmpty) return;
+                final qty = num.tryParse(qtyController.text.trim()) ?? 1;
+                Navigator.pop(ctx, {
+                  'name': name,
+                  'quantity': qty,
+                  'unit': unitController.text.trim().isEmpty
+                      ? 'ea'
+                      : unitController.text.trim(),
+                  'note': noteController.text.trim(),
+                });
+              },
+              child: const Text('Save'),
             ),
           ],
-        ),
-      ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-        FilledButton(
-          onPressed: () {
-            final name = nameController.text.trim();
-            if (name.isEmpty) return;
-            final qty = num.tryParse(qtyController.text.trim()) ?? 1;
-            Navigator.pop(ctx, {
-              'name': name,
-              'quantity': qty,
-              'unit': unitController.text.trim().isEmpty
-                  ? 'ea'
-                  : unitController.text.trim(),
-              'note': noteController.text.trim(),
-            });
-          },
-          child: const Text('Save'),
-        ),
-      ],
+        );
+      },
     ),
   );
 }

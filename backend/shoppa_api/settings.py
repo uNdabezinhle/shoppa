@@ -233,6 +233,15 @@ if not DEBUG:
     CSRF_COOKIE_SECURE = os.environ.get("CSRF_COOKIE_SECURE", "True") == "True"
     SECURE_SSL_REDIRECT = os.environ.get("SECURE_SSL_REDIRECT", "False") == "True"
 
+# Pending list invites (and future password-reset mail). Console in dev;
+# override EMAIL_BACKEND in production (e.g. SMTP or SES).
+EMAIL_BACKEND = os.environ.get(
+    "EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend"
+)
+DEFAULT_FROM_EMAIL = os.environ.get(
+    "DEFAULT_FROM_EMAIL", "Shoppa <noreply@shoppa.app>"
+)
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,

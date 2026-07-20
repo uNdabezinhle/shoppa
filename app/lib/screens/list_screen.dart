@@ -2,26 +2,47 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:go_router/go_router.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../core/ads_repository.dart';
 import '../core/api_client.dart';
 import '../core/catalogue_repository.dart';
 import '../core/export_download.dart';
+import '../core/aisle_sort.dart';
 import '../core/list_chat_client.dart';
 import '../core/list_realtime_client.dart';
+import '../core/list_realtime_patch.dart';
+import '../core/list_category_style.dart';
 import '../core/list_shop_helpers.dart';
+import '../core/bulk_item_parse.dart';
+import '../core/list_text_format.dart';
 import '../core/lists_repository.dart';
+import '../core/last_paid_prices_store.dart';
+import '../core/recent_items_store.dart';
 import '../core/session_summary.dart';
+import '../core/shop_prefs_store.dart';
 import '../core/shopping_session_store.dart';
 import '../theme/shoppa_theme.dart';
 import '../widgets/ad_banner.dart';
 import '../widgets/ad_interstitial_sheet.dart';
 import '../widgets/ad_native_tile.dart';
 import '../widgets/confidence_chip.dart';
+import '../widgets/bulk_add_sheet.dart';
+import '../core/receipt_capture.dart';
+import '../core/receipt_history_store.dart';
+import '../widgets/copy_list_text_sheet.dart';
+import '../widgets/import_from_list_sheet.dart';
 import '../widgets/item_form_dialog.dart';
+import '../widgets/list_form_dialog.dart';
+import '../widgets/pick_list_sheet.dart';
 import '../widgets/presence_banner.dart';
 import '../widgets/product_picker_sheet.dart';
+import '../widgets/receipt_capture_sheet.dart';
+import '../widgets/receipt_history_sheet.dart';
 import '../widgets/scale_guests_sheet.dart';
+import '../widgets/shopping_at_store_sheet.dart';
 
 /// Item check-off view (SRS FR-2.2, FR-4.1) with a price-capture prompt
 /// on check-off (FR-4.3) and a session summary on completion (FR-4.4),
@@ -41,6 +62,7 @@ class ListScreen extends StatefulWidget {
     this.accountType = 'personal',
     required this.listId,
     required this.title,
+    this.startInShopMode = false,
   });
 
   final AdsRepository adsRepository;
@@ -52,6 +74,8 @@ class ListScreen extends StatefulWidget {
   final String accountType;
   final String listId;
   final String title;
+  /// Open already in shop mode (e.g. My Lists “Start shopping”).
+  final bool startInShopMode;
 
   @override
   State<ListScreen> createState() => _ListScreenState();
@@ -68,6 +92,9 @@ class _ListScreenState extends State<ListScreen> {
   final Map<String, String> _activeEditors = {};
   RealtimeConnectionState _connectionState = RealtimeConnectionState.connecting;
   final _realtimeBroadcast = StreamController<ListRealtimeEvent>.broadcast();
+  /// Latest list applied from REST or an incremental WS patch — used so
+  /// realtime events don't need to await an in-flight Future.
+  ShoppaList? _listSnapshot;
   // SRS FR-5.3/FR-5.4: store the shopper is currently in (comparison sheet).
   // Persisted per list so it survives leave/restart; cleared via the ✕ chip.
   String? _shoppingAtStoreId;
@@ -75,21 +102,64 @@ class _ListScreenState extends State<ListScreen> {
   final ShoppingSessionStore _sessionStore =
       SharedPreferencesShoppingSessionStore();
   bool _shopMode = false;
+  /// When true (default in shop mode), group remaining items by aisle.
+  bool _aisleOrder = true;
+  /// Aisle group ids the shopper collapsed (tap sticky header to toggle).
+  final Set<String> _collapsedAisleIds = {};
+  /// Preferred store aisle layout id; null = auto from shopping-at / receipt.
+  String? _aisleLayoutId;
+  /// All / remaining / checked-off view filter.
+  ItemViewFilter _itemFilter = ItemViewFilter.all;
+  /// Manual position order, or A–Z by name.
+  ItemOrderMode _itemOrder = ItemOrderMode.manual;
   bool _dismissedStoreNudge = false;
+  final _searchController = TextEditingController();
+  final _quickAddController = TextEditingController();
+  final _quickAddFocus = FocusNode();
+  String _searchQuery = '';
+  bool _selectMode = false;
+  final Set<String> _selectedIds = {};
+  /// Cached list comparison for basket estimate on the progress strip.
+  ShoppaComparison? _comparison;
+  bool _comparisonLoading = false;
+  bool _quickAddBusy = false;
+  final RecentItemsStore _recentItems = SharedPreferencesRecentItemsStore();
+  List<String> _recentNames = const [];
+  final ShopPrefsStore _shopPrefs = SharedPreferencesShopPrefsStore();
+  /// When true, check-off skips the price dialog (faster in-store shopping).
+  bool _skipPricePrompt = false;
+  /// When true in shop mode: larger check targets, hide search/filters chrome.
+  bool _focusShop = false;
+  /// When true in shop mode, prevent the display from sleeping.
+  bool _keepScreenOn = true;
+  final ReceiptHistoryStore _receiptHistory =
+      SharedPreferencesReceiptHistoryStore();
+  final LastPaidPricesStore _lastPaidPrices =
+      SharedPreferencesLastPaidPricesStore();
+  /// Snapshot for remaining-spend estimates (refreshed on price memory writes).
+  Map<String, int> _lastPaidSnapshot = const {};
+  LoggedReceipt? _latestReceipt;
+  late String _displayTitle;
 
   @override
   void initState() {
     super.initState();
+    _displayTitle = widget.title;
+    _shopMode = widget.startInShopMode;
     _adSessionKey = '${widget.listId}-${DateTime.now().microsecondsSinceEpoch}';
     _listBanner = _loadListBanner();
     _list = _loadAndSync();
-    _list.then((_) => _refreshPendingCount(), onError: (_) {});
+    _list.then((_) {
+      _refreshPendingCount();
+      _refreshComparison();
+    }, onError: (_) {});
     _restoreShoppingAtStore();
-    // SRS FR-3.2: any item/collaborator change from another collaborator
-    // triggers an immediate refetch, rather than waiting for a manual
-    // pull-to-refresh -- this is deliberately a full refetch (not
-    // incremental patching) so the screen can never drift from what the
-    // REST detail endpoint says is true.
+    _loadRecentNames();
+    _loadShopPrefs();
+    _loadLatestReceipt();
+    _loadLastPaidSnapshot();
+    // SRS FR-3.2: item/scale events patch the in-memory list; collaborator
+    // events still trigger a debounced full detail refetch.
     _connectionSubscription = widget.realtimeClient.connectionState.listen(
       (state) {
         if (!mounted) return;
@@ -123,7 +193,26 @@ class _ListScreenState extends State<ListScreen> {
       }
       return;
     }
-    _scheduleReload();
+    final current = _listSnapshot;
+    if (current == null) {
+      _scheduleReload();
+      return;
+    }
+    final patched = applyListRealtimeEvent(current, event);
+    if (patched == null) {
+      _scheduleReload();
+      return;
+    }
+    if (identical(patched, current)) return;
+    _setListSnapshot(patched);
+  }
+
+  void _setListSnapshot(ShoppaList list) {
+    _listSnapshot = list;
+    if (!mounted) return;
+    setState(() {
+      _list = Future.value(list);
+    });
   }
 
   void _scheduleReload() {
@@ -136,7 +225,11 @@ class _ListScreenState extends State<ListScreen> {
     _reloadDebounce?.cancel();
     _realtimeSubscription?.cancel();
     _connectionSubscription?.cancel();
+    _searchController.dispose();
+    _quickAddController.dispose();
+    _quickAddFocus.dispose();
     unawaited(_realtimeBroadcast.close());
+    unawaited(_releaseKeepAwake());
     super.dispose();
   }
 
@@ -149,9 +242,13 @@ class _ListScreenState extends State<ListScreen> {
     if (!list.fromCache) {
       final synced = await widget.listsRepository.syncPending(widget.listId);
       if (synced > 0) {
-        return widget.listsRepository.fetchListDetail(widget.listId);
+        final merged =
+            await widget.listsRepository.fetchListDetail(widget.listId);
+        _listSnapshot = merged;
+        return merged;
       }
     }
+    _listSnapshot = list;
     return list;
   }
 
@@ -166,7 +263,25 @@ class _ListScreenState extends State<ListScreen> {
     setState(() {
       _list = _loadAndSync();
     });
-    _list.then((_) => _refreshPendingCount(), onError: (_) {});
+    _list.then((_) {
+      _refreshPendingCount();
+      _refreshComparison();
+    }, onError: (_) {});
+  }
+
+  Future<void> _refreshComparison() async {
+    if (_comparisonLoading) return;
+    _comparisonLoading = true;
+    try {
+      final comparison =
+          await widget.listsRepository.fetchComparison(widget.listId);
+      if (!mounted) return;
+      setState(() => _comparison = comparison);
+    } catch (_) {
+      // Offline or no priced items — leave previous estimate if any.
+    } finally {
+      _comparisonLoading = false;
+    }
   }
 
   Future<void> _toggle(ShoppaListItem item, bool canEdit) async {
@@ -176,39 +291,156 @@ class _ListScreenState extends State<ListScreen> {
     }
     final checking = !item.checked;
     int? paidPrice;
-    if (checking) {
+    if (checking && !_skipPricePrompt) {
       // SRS FR-4.3: confirm or enter the actual price when checking off.
-      // There's no price-intelligence comparison price to "confirm"
-      // against yet (that lands with Phase 3), so this is scoped to
-      // "enter the price paid, or skip" for now.
+      // Fast check-off (shop prefs) skips this for quicker in-store trips.
       if (!mounted) return;
       paidPrice = await _promptForPrice(item);
       if (!mounted) return;
     }
-    await widget.listsRepository.setItemChecked(
-      widget.listId,
-      item.id,
-      checked: checking,
-      paidPrice: paidPrice,
-      storeId: checking ? _shoppingAtStoreId : null,
-      clientUpdatedAt: DateTime.now().toUtc(),
-    );
+    try {
+      await widget.listsRepository.setItemChecked(
+        widget.listId,
+        item.id,
+        checked: checking,
+        paidPrice: paidPrice,
+        storeId: checking ? _observationStoreId : null,
+        clientUpdatedAt: DateTime.now().toUtc(),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not update item: $e'),
+          backgroundColor: ShoppaColors.rose,
+        ),
+      );
+      return;
+    }
+    HapticFeedback.lightImpact();
+
+    // Optimistic trip-complete detection before the reload finishes.
+    final snapItems = _listSnapshot?.items ?? const <ShoppaListItem>[];
+    var checkedCount = 0;
+    for (final i in snapItems) {
+      final isChecked = i.id == item.id ? checking : i.checked;
+      if (isChecked) checkedCount++;
+    }
+    final justCompleted =
+        checking && snapItems.isNotEmpty && checkedCount == snapItems.length;
+
+    // Collapse the aisle once nothing open remains; expand the next walk aisle.
+    AisleGroup? nextAisle;
+    if (checking && _shopMode && _aisleOrder) {
+      final aisleId = aisleForItem(item).id;
+      final projectedItems = <ShoppaListItem>[];
+      for (final i in snapItems) {
+        if (i.id == item.id) {
+          projectedItems.add(
+            ShoppaListItem(
+              id: i.id,
+              name: i.name,
+              quantity: i.quantity,
+              unit: i.unit,
+              note: i.note,
+              checked: true,
+              paidPrice: paidPrice ?? i.paidPrice,
+              productId: i.productId,
+              position: i.position,
+              hasPromotion: i.hasPromotion,
+            ),
+          );
+        } else {
+          projectedItems.add(i);
+        }
+      }
+      final stillOpen = projectedItems.any(
+        (i) => !i.checked && aisleForItem(i).id == aisleId,
+      );
+      if (!stillOpen) {
+        nextAisle = nextOpenAisleGroup(
+          projectedItems,
+          layout: _activeAisleLayout,
+          afterAisleId: aisleId,
+        );
+        setState(() {
+          _collapsedAisleIds.add(aisleId);
+          if (nextAisle != null) {
+            _collapsedAisleIds.remove(nextAisle.id);
+          }
+        });
+      }
+    }
+
     _reload();
+    if (!mounted) return;
+
+    if (justCompleted) {
+      try {
+        final list = await _list;
+        if (!mounted) return;
+        if (listProgress(list.items ?? const []).isComplete) {
+          await _openSessionSummary(list);
+          return;
+        }
+      } catch (_) {
+        // Fall through to undo snackbar if reload fails.
+      }
+    }
+
+    if (!checking) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          nextAisle == null
+              ? 'Checked off ${item.name}'
+              : 'Checked off ${item.name} · ${formatNextAisleHint(nextAisle)}',
+        ),
+        backgroundColor: ShoppaColors.panel2,
+        action: SnackBarAction(
+          label: 'Undo',
+          textColor: ShoppaColors.amber,
+          onPressed: () async {
+            try {
+              await widget.listsRepository.setItemChecked(
+                widget.listId,
+                item.id,
+                checked: false,
+                clientUpdatedAt: DateTime.now().toUtc(),
+              );
+              _reload();
+            } catch (_) {}
+          },
+        ),
+      ),
+    );
   }
 
   /// Returns the entered price in minor units (cents), or null if the
   /// user skipped/cancelled/entered something unparsable.
   Future<int?> _promptForPrice(ShoppaListItem item) async {
     ProductStorePrice? storePrice;
-    if (item.productId != null && _shoppingAtStoreId != null) {
+    final obsStoreId = _observationStoreId;
+    if (item.productId != null && obsStoreId != null) {
       storePrice = await widget.catalogueRepository.fetchStorePrice(
         productId: item.productId!,
-        storeId: _shoppingAtStoreId!,
+        storeId: obsStoreId,
       );
     }
+    // Prefer live store suggestion; then this line’s paid price; then
+    // device memory of the last paid price for this name (any list).
+    final lastPaid = item.paidPrice;
+    final remembered = lastPaid == null && storePrice == null
+        ? await _lastPaidPrices.getCents(item.name)
+        : null;
+    final suggestedCents = storePrice?.price ?? lastPaid ?? remembered;
+    final usingLastPaid = storePrice == null && lastPaid != null;
+    final usingRemembered =
+        storePrice == null && lastPaid == null && remembered != null;
     final controller = TextEditingController(
-      text: storePrice != null
-          ? (storePrice.price / 100).toStringAsFixed(2)
+      text: suggestedCents != null
+          ? (suggestedCents / 100).toStringAsFixed(2)
           : '',
     );
     final result = await showDialog<String>(
@@ -236,6 +468,18 @@ class _ListScreenState extends State<ListScreen> {
                 style: const TextStyle(color: ShoppaColors.faint, fontSize: 11),
               ),
               const SizedBox(height: 8),
+            ] else if (usingLastPaid) ...[
+              const Text(
+                'Last paid on this list',
+                style: TextStyle(color: ShoppaColors.mist, fontSize: 12),
+              ),
+              const SizedBox(height: 8),
+            ] else if (usingRemembered) ...[
+              const Text(
+                'Last paid for this item (remembered)',
+                style: TextStyle(color: ShoppaColors.mist, fontSize: 12),
+              ),
+              const SizedBox(height: 8),
             ],
             TextField(
               controller: controller,
@@ -261,13 +505,262 @@ class _ListScreenState extends State<ListScreen> {
     if (result == null || result.trim().isEmpty) return null;
     final parsed = double.tryParse(result.trim());
     if (parsed == null) return null;
-    return (parsed * 100).round();
+    final cents = (parsed * 100).round();
+    if (cents > 0) {
+      await _rememberPaidPrice(item.name, cents);
+    }
+    return cents;
   }
 
   void _showViewOnlySnack() {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('You have view-only access to this list.')),
     );
+  }
+
+  Future<void> _loadRecentNames() async {
+    final names = await _recentItems.getRecent();
+    if (!mounted) return;
+    setState(() => _recentNames = names);
+  }
+
+  Future<void> _loadShopPrefs() async {
+    final skip = await _shopPrefs.getSkipPricePrompt();
+    final focus = await _shopPrefs.getFocusShopMode();
+    final keepOn = await _shopPrefs.getKeepScreenOn();
+    final layoutId = await _shopPrefs.getAisleLayoutId();
+    if (!mounted) return;
+    setState(() {
+      _skipPricePrompt = skip;
+      _focusShop = focus;
+      _keepScreenOn = keepOn;
+      _aisleLayoutId = layoutId;
+      // Apply focus filter when deep-linked into shop mode with focus pref on.
+      if (_shopMode && focus) {
+        _itemFilter = ItemViewFilter.remaining;
+      }
+    });
+    await _syncKeepAwake();
+  }
+
+  StoreAisleLayout get _activeAisleLayout => resolveStoreAisleLayout(
+        storeName: _shoppingAtStoreName ?? _latestReceipt?.storeName,
+        layoutId: _aisleLayoutId,
+      );
+
+  /// Catalogue store id for price observations; null for free-text names.
+  String? get _observationStoreId =>
+      isCatalogueStoreId(_shoppingAtStoreId) ? _shoppingAtStoreId : null;
+
+  Future<void> _pickAisleLayout() async {
+    final selected = await showDialog<String>(
+      context: context,
+      builder: (ctx) {
+        return SimpleDialog(
+          title: const Text('Aisle walk order'),
+          children: [
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, 'auto'),
+              child: ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Auto from store name'),
+                subtitle: Text(
+                  storeAisleLayoutForName(
+                    _shoppingAtStoreName ?? _latestReceipt?.storeName,
+                  ).label,
+                ),
+                trailing: _aisleLayoutId == null
+                    ? const Icon(Icons.check, color: ShoppaColors.green)
+                    : null,
+              ),
+            ),
+            for (final layout in storeAisleLayouts)
+              SimpleDialogOption(
+                onPressed: () => Navigator.pop(ctx, layout.id),
+                child: ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(layout.label),
+                  trailing: _aisleLayoutId == layout.id
+                      ? const Icon(Icons.check, color: ShoppaColors.green)
+                      : null,
+                ),
+              ),
+          ],
+        );
+      },
+    );
+    if (selected == null || !mounted) return;
+    final id = selected == 'auto' ? null : selected;
+    setState(() => _aisleLayoutId = id);
+    await _shopPrefs.setAisleLayoutId(id);
+    if (!mounted) return;
+    final layout = resolveStoreAisleLayout(
+      storeName: _shoppingAtStoreName ?? _latestReceipt?.storeName,
+      layoutId: id,
+    );
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          id == null
+              ? 'Aisle order: auto (${layout.label})'
+              : 'Aisle order: ${layout.label}',
+        ),
+        backgroundColor: ShoppaColors.panel2,
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  Future<void> _toggleSkipPricePrompt() async {
+    final next = !_skipPricePrompt;
+    setState(() => _skipPricePrompt = next);
+    await _shopPrefs.setSkipPricePrompt(next);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          next
+              ? 'Fast check-off on — price prompt skipped'
+              : 'Price prompt on check-off restored',
+        ),
+        backgroundColor: ShoppaColors.panel2,
+      ),
+    );
+  }
+
+  Future<void> _toggleFocusShop() async {
+    final next = !_focusShop;
+    setState(() {
+      _focusShop = next;
+      if (next) {
+        _itemFilter = ItemViewFilter.remaining;
+        _searchQuery = '';
+        _searchController.clear();
+      }
+    });
+    await _shopPrefs.setFocusShopMode(next);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          next
+              ? 'Focus mode — bigger checks, remaining items only'
+              : 'Focus mode off',
+        ),
+        backgroundColor: ShoppaColors.panel2,
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  Future<void> _toggleKeepScreenOn() async {
+    final next = !_keepScreenOn;
+    setState(() => _keepScreenOn = next);
+    await _shopPrefs.setKeepScreenOn(next);
+    await _syncKeepAwake();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          next
+              ? 'Screen stays on while shopping'
+              : 'Screen can sleep while shopping',
+        ),
+        backgroundColor: ShoppaColors.panel2,
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  /// Hold the display awake only while shop mode + preference allow it.
+  Future<void> _syncKeepAwake() async {
+    try {
+      if (_shopMode && _keepScreenOn) {
+        await WakelockPlus.enable();
+      } else {
+        await WakelockPlus.disable();
+      }
+    } catch (_) {
+      // Unsupported on some desktop/web builds — ignore.
+    }
+  }
+
+  Future<void> _releaseKeepAwake() async {
+    try {
+      await WakelockPlus.disable();
+    } catch (_) {}
+  }
+
+  bool get _shopFocusActive => _shopMode && _focusShop;
+
+  Future<void> _rememberNames(Iterable<String> names) async {
+    await _recentItems.recordMany(names);
+    await _loadRecentNames();
+  }
+
+  /// Adds a new line, or bumps quantity on an existing unchecked match
+  /// (same name + unit, case-insensitive).
+  ///
+  /// When [liveItems] is provided (bulk paste/import), merges against that
+  /// working copy and patches it so subsequent lines see updated qty without
+  /// a network round-trip between each row.
+  Future<bool> _addOrMergeItem({
+    required String name,
+    num quantity = 1,
+    String unit = 'ea',
+    String note = '',
+    String? productId,
+    bool showMergeSnack = true,
+    List<ShoppaListItem>? liveItems,
+  }) async {
+    final pool = liveItems ?? _listSnapshot?.items ?? const [];
+    final existing = findMatchingListItem(pool, name: name, unit: unit);
+    if (existing != null) {
+      final nextQty = existing.quantity + quantity;
+      await widget.listsRepository.updateItem(
+        widget.listId,
+        existing.id,
+        quantity: nextQty,
+      );
+      if (liveItems != null) {
+        final idx = liveItems.indexWhere((i) => i.id == existing.id);
+        if (idx >= 0) {
+          liveItems[idx] = ShoppaListItem(
+            id: existing.id,
+            name: existing.name,
+            quantity: nextQty,
+            unit: existing.unit,
+            note: existing.note,
+            checked: existing.checked,
+            productId: existing.productId,
+            paidPrice: existing.paidPrice,
+            position: existing.position,
+            hasPromotion: existing.hasPromotion,
+          );
+        }
+      }
+      if (showMergeSnack && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Updated “${existing.name}”: qty $nextQty ${existing.unit}',
+            ),
+            backgroundColor: ShoppaColors.panel2,
+          ),
+        );
+      }
+      return true; // merged
+    }
+    final created = await widget.listsRepository.addItem(
+      widget.listId,
+      name: name,
+      quantity: quantity,
+      unit: unit,
+      note: note,
+      productId: productId,
+    );
+    liveItems?.add(created);
+    return false; // created
   }
 
   Future<void> _addItem() async {
@@ -282,20 +775,463 @@ class _ListScreenState extends State<ListScreen> {
     );
     if (values == null) return;
     try {
-      await widget.listsRepository.addItem(
-        widget.listId,
-        name: values['name'] as String,
+      final name = values['name'] as String;
+      await _addOrMergeItem(
+        name: name,
         quantity: values['quantity'] as num,
         unit: values['unit'] as String,
         note: values['note'] as String,
         productId: product?.id,
       );
+      await _rememberNames([name]);
       _reload();
     } on ApiException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(e.message)));
     }
+  }
+
+  Future<void> _duplicateItem(ShoppaListItem item) async {
+    try {
+      await widget.listsRepository.addItem(
+        widget.listId,
+        name: item.name,
+        quantity: item.quantity,
+        unit: item.unit,
+        note: item.note,
+        productId: item.productId,
+      );
+      await _rememberNames([item.name]);
+      _reload();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Duplicated “${item.name}”'),
+          backgroundColor: ShoppaColors.panel2,
+        ),
+      );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message), backgroundColor: ShoppaColors.rose),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not duplicate: $e'),
+          backgroundColor: ShoppaColors.rose,
+        ),
+      );
+    }
+  }
+
+  Future<void> _showAddMenu() async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: ShoppaColors.panel,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.add_circle_outline),
+              title: const Text('Add item'),
+              subtitle: const Text('Catalogue search or free text'),
+              onTap: () => Navigator.pop(ctx, 'single'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.playlist_add_outlined),
+              title: const Text('Paste many'),
+              subtitle: const Text('One item per line'),
+              onTap: () => Navigator.pop(ctx, 'paste'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.receipt_long_outlined),
+              title: const Text('From receipt text'),
+              subtitle: const Text('Paste lines from a receipt (no camera)'),
+              onTap: () => Navigator.pop(ctx, 'receipt'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.library_add_outlined),
+              title: const Text('Import from list'),
+              subtitle: const Text('Copy items from another list'),
+              onTap: () => Navigator.pop(ctx, 'import'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || choice == null) return;
+    if (choice == 'single') {
+      await _addItem();
+    } else if (choice == 'import') {
+      await _importFromList();
+    } else {
+      await _bulkAddItems(fromReceipt: choice == 'receipt');
+    }
+  }
+
+  Future<void> _bulkAddItems({required bool fromReceipt}) async {
+    final parsed = await showBulkAddSheet(
+      context,
+      title: fromReceipt ? 'From receipt text' : 'Paste items',
+    );
+    if (parsed == null || parsed.isEmpty || !mounted) return;
+
+    try {
+      final live = List<ShoppaListItem>.from(_listSnapshot?.items ?? const []);
+      var created = 0;
+      var merged = 0;
+      for (final line in parsed) {
+        final didMerge = await _addOrMergeItem(
+          name: line.name,
+          quantity: line.quantity,
+          unit: line.unit,
+          showMergeSnack: false,
+          liveItems: live,
+        );
+        if (didMerge) {
+          merged++;
+        } else {
+          created++;
+        }
+      }
+      await _rememberNames(parsed.map((p) => p.name));
+      _reload();
+      if (!mounted) return;
+      final parts = <String>[];
+      if (created > 0) {
+        parts.add('Added $created');
+      }
+      if (merged > 0) {
+        parts.add('merged $merged');
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(parts.isEmpty ? 'Nothing to add' : parts.join(', ')),
+          backgroundColor: ShoppaColors.panel2,
+        ),
+      );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message), backgroundColor: ShoppaColors.rose),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not add items: $e'),
+          backgroundColor: ShoppaColors.rose,
+        ),
+      );
+    }
+  }
+
+  Future<void> _importFromList() async {
+    final chosen = await showImportFromListSheet(
+      context,
+      listsRepository: widget.listsRepository,
+      currentListId: widget.listId,
+    );
+    if (chosen == null || chosen.isEmpty || !mounted) return;
+
+    try {
+      final live = List<ShoppaListItem>.from(_listSnapshot?.items ?? const []);
+      var created = 0;
+      var merged = 0;
+      for (final item in chosen) {
+        final didMerge = await _addOrMergeItem(
+          name: item.name,
+          quantity: item.quantity,
+          unit: item.unit,
+          note: item.note,
+          productId: item.productId,
+          showMergeSnack: false,
+          liveItems: live,
+        );
+        if (didMerge) {
+          merged++;
+        } else {
+          created++;
+        }
+      }
+      await _rememberNames(chosen.map((i) => i.name));
+      _reload();
+      if (!mounted) return;
+      final parts = <String>[];
+      if (created > 0) {
+        parts.add('Imported $created');
+      }
+      if (merged > 0) {
+        parts.add('merged $merged');
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(parts.isEmpty ? 'Nothing to import' : parts.join(', ')),
+          backgroundColor: ShoppaColors.panel2,
+        ),
+      );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message), backgroundColor: ShoppaColors.rose),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not import: $e'),
+          backgroundColor: ShoppaColors.rose,
+        ),
+      );
+    }
+  }
+
+  Future<void> _quickAddSubmit() async {
+    if (_quickAddBusy) return;
+    final text = _quickAddController.text.trim();
+    if (text.isEmpty) return;
+    final parsed = parseBulkItemLines(text);
+    if (parsed.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not parse that item')),
+      );
+      return;
+    }
+    setState(() => _quickAddBusy = true);
+    try {
+      final live = List<ShoppaListItem>.from(_listSnapshot?.items ?? const []);
+      for (final line in parsed) {
+        await _addOrMergeItem(
+          name: line.name,
+          quantity: line.quantity,
+          unit: line.unit,
+          showMergeSnack: parsed.length == 1,
+          liveItems: live,
+        );
+      }
+      await _rememberNames(parsed.map((p) => p.name));
+      _quickAddController.clear();
+      _reload();
+      if (!mounted) return;
+      _quickAddFocus.requestFocus();
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message), backgroundColor: ShoppaColors.rose),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not add: $e'),
+          backgroundColor: ShoppaColors.rose,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _quickAddBusy = false);
+    }
+  }
+
+  Future<void> _removeCheckedItems(ShoppaList list) async {
+    final checked = (list.items ?? []).where((i) => i.checked).toList();
+    if (checked.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No checked items to remove')),
+      );
+      return;
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove checked items?'),
+        content: Text(
+          'Permanently remove ${checked.length} checked item'
+          '${checked.length == 1 ? '' : 's'} from this list?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(backgroundColor: ShoppaColors.rose),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    for (final item in checked) {
+      try {
+        await widget.listsRepository.deleteItem(widget.listId, item.id);
+      } catch (_) {}
+    }
+    _reload();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Removed ${checked.length} item${checked.length == 1 ? '' : 's'}',
+        ),
+        backgroundColor: ShoppaColors.panel2,
+      ),
+    );
+  }
+
+  Future<void> _copyListAsText(ShoppaList? list) async {
+    ShoppaList? source = list;
+    if (source?.items == null) {
+      try {
+        source = await widget.listsRepository.fetchListDetail(widget.listId);
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not load list: $e'),
+            backgroundColor: ShoppaColors.rose,
+          ),
+        );
+        return;
+      }
+    }
+    if (source == null || !mounted) return;
+    final result = await showCopyListTextSheet(context, list: source);
+    if (result == null || !mounted) return;
+    final options = result.options;
+    final text = formatListAsText(source, options: options);
+    final n = (source.items ?? const <ShoppaListItem>[])
+        .where(
+          (i) => options.checkedOnly
+              ? i.checked
+              : (options.includeChecked || !i.checked),
+        )
+        .length;
+
+    if (result.action == ListTextExportAction.share) {
+      final box = context.findRenderObject() as RenderBox?;
+      final origin = box != null
+          ? box.localToGlobal(Offset.zero) & box.size
+          : null;
+      try {
+        await Share.share(
+          text,
+          subject: source.title,
+          sharePositionOrigin: origin,
+        );
+      } catch (_) {
+        // Web / desktop without a share target — fall back to clipboard.
+        await Clipboard.setData(ClipboardData(text: text));
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Share unavailable — copied $n line${n == 1 ? '' : 's'} instead',
+            ),
+            backgroundColor: ShoppaColors.panel2,
+          ),
+        );
+      }
+      return;
+    }
+
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Copied $n line${n == 1 ? '' : 's'} — paste into WhatsApp or notes',
+        ),
+        backgroundColor: ShoppaColors.panel2,
+      ),
+    );
+  }
+
+  Future<void> _editItemNote(ShoppaListItem item) async {
+    final controller = TextEditingController(text: item.note);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(item.note.isEmpty ? 'Add note' : 'Edit note'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLines: 3,
+          decoration: InputDecoration(
+            hintText: 'e.g. brand, size, aisle tip',
+            labelText: item.name,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          if (item.note.isNotEmpty)
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, ''),
+              child: const Text('Clear'),
+            ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (result == null || !mounted) return;
+    if (result == item.note) return;
+    try {
+      await widget.listsRepository.updateItem(
+        widget.listId,
+        item.id,
+        note: result,
+      );
+      _reload();
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message), backgroundColor: ShoppaColors.rose),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not save note: $e'),
+          backgroundColor: ShoppaColors.rose,
+        ),
+      );
+    }
+  }
+
+  Future<void> _uncheckAll(ShoppaList list) async {
+    final checked = (list.items ?? []).where((i) => i.checked).toList();
+    if (checked.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Nothing is checked off')),
+      );
+      return;
+    }
+    await _startNewTrip(list);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Unchecked ${checked.length} item${checked.length == 1 ? '' : 's'}',
+        ),
+        backgroundColor: ShoppaColors.panel2,
+      ),
+    );
   }
 
   Future<void> _editItem(ShoppaListItem item) async {
@@ -325,25 +1261,373 @@ class _ListScreenState extends State<ListScreen> {
     }
   }
 
-  Future<bool> _confirmDeleteItem(ShoppaListItem item) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Remove item?'),
-        content: Text('Remove "${item.name}" from this list?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
+  /// Set or change paid price (works after fast check-off or any time).
+  Future<void> _setPaidPrice(ShoppaListItem item) async {
+    if (!mounted) return;
+    final paidPrice = await _promptForPrice(item);
+    if (paidPrice == null || !mounted) return;
+    try {
+      await widget.listsRepository.setItemChecked(
+        widget.listId,
+        item.id,
+        checked: true,
+        paidPrice: paidPrice,
+        storeId: _observationStoreId,
+        clientUpdatedAt: DateTime.now().toUtc(),
+      );
+      _reload();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Price set: ${formatCents(paidPrice)} for ${item.name}',
           ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Remove'),
+          backgroundColor: ShoppaColors.panel2,
+        ),
+      );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message), backgroundColor: ShoppaColors.rose),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not set price: $e'),
+          backgroundColor: ShoppaColors.rose,
+        ),
+      );
+    }
+  }
+
+  Future<void> _loadLatestReceipt() async {
+    final latest = await _receiptHistory.latestForScope(widget.listId);
+    if (!mounted) return;
+    setState(() => _latestReceipt = latest);
+  }
+
+  Future<void> _loadLastPaidSnapshot() async {
+    final snap = await _lastPaidPrices.snapshot();
+    if (!mounted) return;
+    setState(() => _lastPaidSnapshot = snap);
+  }
+
+  Future<void> _rememberPaidPrice(String name, int cents) async {
+    if (cents <= 0) return;
+    await _lastPaidPrices.record(name, cents);
+    await _loadLastPaidSnapshot();
+  }
+
+  Future<void> _showReceiptHistory() async {
+    await showReceiptHistorySheet(
+      context,
+      store: _receiptHistory,
+      scopeId: widget.listId,
+      title: 'Receipt history',
+    );
+    await _loadLatestReceipt();
+  }
+
+  /// Log till total; optionally fill missing paid prices from the receipt.
+  Future<void> _logReceipt(ShoppaList list) async {
+    if (!list.canEdit) {
+      _showViewOnlySnack();
+      return;
+    }
+    final items = list.items ?? const <ShoppaListItem>[];
+    final recentReceipts = await _receiptHistory.recent(limit: 40);
+    final storeSuggestions = frequentStoreNames(recentReceipts);
+    final capture = await showReceiptCaptureSheet(
+      context,
+      items: items,
+      initialStoreName: _shoppingAtStoreName ?? _latestReceipt?.storeName,
+      suggestedStores: storeSuggestions,
+    );
+    if (capture == null || !capture.hasTotal || !mounted) return;
+
+    final suggestions = suggestPricesFromReceiptTotal(
+      items: items,
+      receiptTotalCents: capture.totalCents!,
+    );
+    var applied = 0;
+    if (suggestions.isNotEmpty) {
+      final apply = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Apply receipt total?'),
+          content: Text(
+            'Receipt ${capture.formattedTotal}'
+            '${capture.storeName.isNotEmpty ? ' at ${capture.storeName}' : ''}.\n\n'
+            'Fill ${suggestions.length} checked item'
+            '${suggestions.length == 1 ? '' : 's'} still missing prices '
+            '(split by quantity)?',
           ),
-        ],
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Total only'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Fill prices'),
+            ),
+          ],
+        ),
+      );
+      if (apply == true) {
+        final byId = {for (final i in items) i.id: i};
+        for (final s in suggestions) {
+          try {
+            await widget.listsRepository.setItemChecked(
+              widget.listId,
+              s.itemId,
+              checked: true,
+              paidPrice: s.cents,
+              storeId: _observationStoreId,
+              clientUpdatedAt: DateTime.now().toUtc(),
+            );
+            final name = byId[s.itemId]?.name;
+            if (name != null && s.cents > 0) {
+              await _rememberPaidPrice(name, s.cents);
+            }
+            applied++;
+          } catch (_) {}
+        }
+        _reload();
+      }
+    }
+
+    // Snapshot basket spend (checked paid prices), after any receipt fills.
+    var pricedItems = items;
+    if (applied > 0) {
+      try {
+        final refreshed =
+            await widget.listsRepository.fetchListDetail(widget.listId);
+        pricedItems = refreshed.items ?? items;
+      } catch (_) {}
+    }
+    final spendAfter = tripSpend(pricedItems);
+    final logged = loggedReceiptFromCapture(
+      capture: capture,
+      scopeId: widget.listId,
+      pricesFilled: applied,
+      listTitles: [list.title],
+      basketCents: spendAfter.spentCents,
+    );
+    await _receiptHistory.add(logged);
+    if (!mounted) return;
+    setState(() => _latestReceipt = logged);
+    // Seed free-text shopping-at when none is set yet.
+    final receiptStore = capture.storeName.trim();
+    if (receiptStore.isNotEmpty &&
+        (_shoppingAtStoreName == null ||
+            _shoppingAtStoreName!.trim().isEmpty)) {
+      await _setShoppingAtByName(receiptStore);
+    }
+
+    var addedFromReceipt = 0;
+    if (capture.itemsToAdd.isNotEmpty && list.canEdit) {
+      final add = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Add receipt items?'),
+          content: Text(
+            'Add ${capture.itemsToAdd.length} item'
+            '${capture.itemsToAdd.length == 1 ? '' : 's'} found on the '
+            'receipt but not on this list?\n\n'
+            '${capture.itemsToAdd.take(8).join('\n')}'
+            '${capture.itemsToAdd.length > 8 ? '\n…' : ''}\n\n'
+            'They’ll be added as checked (already bought).',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Skip'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Add items'),
+            ),
+          ],
+        ),
+      );
+      if (add == true && mounted) {
+        try {
+          final bulk = await widget.listsRepository.addItemsBulk(
+            widget.listId,
+            capture.itemsToAdd
+                .map(
+                  (name) => BulkItemInput(
+                    name: name,
+                    note: 'from receipt',
+                  ),
+                )
+                .toList(),
+          );
+          for (final item in bulk.created) {
+            try {
+              await widget.listsRepository.setItemChecked(
+                widget.listId,
+                item.id,
+                checked: true,
+                storeId: _observationStoreId,
+                clientUpdatedAt: DateTime.now().toUtc(),
+              );
+              addedFromReceipt++;
+            } catch (_) {}
+          }
+          if (addedFromReceipt > 0) _reload();
+        } catch (e) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Could not add receipt items: $e'),
+                backgroundColor: ShoppaColors.rose,
+              ),
+            );
+          }
+        }
+      }
+    }
+
+    if (!mounted) return;
+    final note = capture.notes.isNotEmpty ? ' · ${capture.notes}' : '';
+    final store =
+        capture.storeName.isNotEmpty ? ' · ${capture.storeName}' : '';
+    final vs = logged.tillVsBasket;
+    final deltaHint = vs != null && vs.hasComparison
+        ? ' · ${vs.variancePhrase}'
+        : '';
+    final addHint =
+        addedFromReceipt > 0 ? ' · added $addedFromReceipt items' : '';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          applied > 0
+              ? 'Receipt ${capture.formattedTotal}$store — filled $applied prices$deltaHint$addHint$note'
+              : 'Receipt logged: ${capture.formattedTotal}$store$deltaHint$addHint$note',
+        ),
+        backgroundColor: ShoppaColors.panel2,
+        action: SnackBarAction(
+          label: 'History',
+          textColor: ShoppaColors.amber,
+          onPressed: _showReceiptHistory,
+        ),
       ),
     );
-    return ok == true;
+  }
+
+  /// Walk checked items missing a price (from trip summary or overflow).
+  Future<void> _fillMissingPrices(ShoppaList list) async {
+    final missing = itemsMissingPaidPrice(list.items ?? const []);
+    if (missing.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('All checked items already have prices')),
+      );
+      return;
+    }
+    var filled = 0;
+    var skipped = 0;
+    for (final item in missing) {
+      if (!mounted) return;
+      final paidPrice = await _promptForPrice(item);
+      if (!mounted) return;
+      if (paidPrice == null) {
+        skipped++;
+        continue;
+      }
+      try {
+        await widget.listsRepository.setItemChecked(
+          widget.listId,
+          item.id,
+          checked: true,
+          paidPrice: paidPrice,
+          storeId: _observationStoreId,
+          clientUpdatedAt: DateTime.now().toUtc(),
+        );
+        filled++;
+      } catch (_) {
+        skipped++;
+      }
+    }
+    _reload();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          skipped == 0
+              ? 'Recorded $filled price${filled == 1 ? '' : 's'}'
+              : 'Recorded $filled, skipped $skipped',
+        ),
+        backgroundColor: ShoppaColors.panel2,
+      ),
+    );
+  }
+
+  /// Delete with snackbar Undo (re-adds the line; new id is fine).
+  Future<void> _deleteItemWithUndo(ShoppaListItem item) async {
+    try {
+      await widget.listsRepository.deleteItem(widget.listId, item.id);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message), backgroundColor: ShoppaColors.rose),
+      );
+      return;
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not remove: $e'),
+          backgroundColor: ShoppaColors.rose,
+        ),
+      );
+      return;
+    }
+    _reload();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Removed ${item.name}'),
+        backgroundColor: ShoppaColors.panel2,
+        action: SnackBarAction(
+          label: 'Undo',
+          textColor: ShoppaColors.amber,
+          onPressed: () async {
+            try {
+              await widget.listsRepository.addItem(
+                widget.listId,
+                name: item.name,
+                quantity: item.quantity,
+                unit: item.unit,
+                note: item.note,
+                productId: item.productId,
+              );
+              _reload();
+            } catch (_) {}
+          },
+        ),
+      ),
+    );
+  }
+
+  void _onItemMenuAction(String value, ShoppaListItem item) {
+    if (value == 'edit') {
+      _editItem(item);
+    } else if (value == 'note') {
+      _editItemNote(item);
+    } else if (value == 'duplicate') {
+      _duplicateItem(item);
+    } else if (value == 'link') {
+      _linkItemToCatalogue(item);
+    } else if (value == 'price') {
+      _setPaidPrice(item);
+    } else if (value == 'delete') {
+      _deleteItemWithUndo(item);
+    }
   }
 
   Future<void> _onReorder(List<ShoppaListItem> items, int oldIndex, int newIndex) async {
@@ -365,21 +1649,37 @@ class _ListScreenState extends State<ListScreen> {
     bool reorderable = false,
     VoidCallback? onDismissed,
   }) {
+    final selected = _selectedIds.contains(item.id);
     final tile = Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Material(
-        color: item.checked
-            ? ShoppaColors.panel2.withOpacity(0.5)
-            : ShoppaColors.panel,
+        color: _selectMode && selected
+            ? ShoppaColors.amber.withOpacity(0.12)
+            : item.checked
+                ? ShoppaColors.panel2.withOpacity(0.5)
+                : ShoppaColors.panel,
         borderRadius: BorderRadius.circular(14),
         child: InkWell(
-          onTap: () => _toggle(item, list.canEdit),
+          onTap: () {
+            if (_selectMode) {
+              _toggleSelected(item.id);
+            } else {
+              _toggle(item, list.canEdit);
+            }
+          },
+          onLongPress: list.canEdit && !_selectMode
+              ? () => _enterSelectMode(item)
+              : null,
           borderRadius: BorderRadius.circular(14),
           child: Container(
-            padding: const EdgeInsets.all(14),
+            padding: EdgeInsets.all(_shopFocusActive ? 18 : 14),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: ShoppaColors.line),
+              border: Border.all(
+                color: _selectMode && selected
+                    ? ShoppaColors.amber
+                    : ShoppaColors.line,
+              ),
             ),
             child: Row(
               children: [
@@ -391,19 +1691,87 @@ class _ListScreenState extends State<ListScreen> {
                   const SizedBox(width: 4),
                 ],
                 Icon(
-                  item.checked
-                      ? Icons.check_circle
-                      : Icons.radio_button_unchecked,
-                  color: item.checked ? ShoppaColors.green : ShoppaColors.faint,
+                  _selectMode
+                      ? (selected
+                          ? Icons.check_box
+                          : Icons.check_box_outline_blank)
+                      : item.checked
+                          ? Icons.check_circle
+                          : Icons.radio_button_unchecked,
+                  size: _shopFocusActive ? 32 : 24,
+                  color: _selectMode
+                      ? (selected ? ShoppaColors.amber : ShoppaColors.faint)
+                      : item.checked
+                          ? ShoppaColors.green
+                          : ShoppaColors.faint,
                 ),
-                const SizedBox(width: 12),
+                SizedBox(width: _shopFocusActive ? 16 : 12),
                 Expanded(child: _itemDetails(item)),
-                if (list.canEdit && !_shopMode)
-                  IconButton(
-                    icon: const Icon(Icons.edit_outlined, size: 20),
-                    color: ShoppaColors.mist,
-                    onPressed: () => _editItem(item),
-                  ),
+                if (list.canEdit && !_selectMode) ...[
+                  if (itemNeedsPaidPrice(item))
+                    IconButton(
+                      tooltip: 'Set paid price',
+                      icon: Icon(
+                        Icons.payments_outlined,
+                        size: _shopFocusActive ? 24 : 20,
+                      ),
+                      color: ShoppaColors.amber,
+                      onPressed: () => _setPaidPrice(item),
+                    ),
+                  if (!_shopFocusActive) _quantityStepper(item),
+                  if (!_shopMode && item.productId == null)
+                    IconButton(
+                      tooltip: 'Link to catalogue',
+                      icon: const Icon(Icons.link, size: 20),
+                      color: ShoppaColors.amber,
+                      onPressed: () => _linkItemToCatalogue(item),
+                    ),
+                  if (!_shopFocusActive)
+                    PopupMenuButton<String>(
+                      tooltip: 'Item actions',
+                      icon: const Icon(
+                        Icons.more_vert,
+                        size: 20,
+                        color: ShoppaColors.mist,
+                      ),
+                      onSelected: (value) => _onItemMenuAction(value, item),
+                      itemBuilder: (ctx) => [
+                        PopupMenuItem(
+                          value: 'price',
+                          child: Text(
+                            item.paidPrice != null
+                                ? 'Edit paid price'
+                                : 'Set paid price',
+                          ),
+                        ),
+                        PopupMenuItem(
+                          value: 'note',
+                          child: Text(
+                            item.note.isEmpty ? 'Add note' : 'Edit note',
+                          ),
+                        ),
+                        if (!_shopMode) ...[
+                          const PopupMenuItem(
+                            value: 'edit',
+                            child: Text('Edit'),
+                          ),
+                          const PopupMenuItem(
+                            value: 'duplicate',
+                            child: Text('Duplicate'),
+                          ),
+                          if (item.productId == null)
+                            const PopupMenuItem(
+                              value: 'link',
+                              child: Text('Link to catalogue'),
+                            ),
+                          const PopupMenuItem(
+                            value: 'delete',
+                            child: Text('Delete'),
+                          ),
+                        ],
+                      ],
+                    ),
+                ],
               ],
             ),
           ),
@@ -411,10 +1779,41 @@ class _ListScreenState extends State<ListScreen> {
       ),
     );
 
-    if (!list.canEdit || onDismissed == null) {
+    if (_selectMode || !list.canEdit) {
       return KeyedSubtree(key: ValueKey(item.id), child: tile);
     }
 
+    // Shop mode: swipe right to check / uncheck (tile stays in place).
+    if (_shopMode) {
+      return Dismissible(
+        key: ValueKey('shop-${item.id}'),
+        direction: DismissDirection.startToEnd,
+        background: Container(
+          alignment: Alignment.centerLeft,
+          padding: const EdgeInsets.only(left: 20),
+          margin: const EdgeInsets.only(bottom: 10),
+          decoration: BoxDecoration(
+            color: item.checked ? ShoppaColors.mist : ShoppaColors.green,
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Icon(
+            item.checked ? Icons.undo : Icons.check,
+            color: Colors.white,
+          ),
+        ),
+        confirmDismiss: (_) async {
+          await _toggle(item, true);
+          return false;
+        },
+        child: tile,
+      );
+    }
+
+    if (onDismissed == null) {
+      return KeyedSubtree(key: ValueKey(item.id), child: tile);
+    }
+
+    // Edit mode: swipe left to delete with Undo snackbar (no confirm dialog).
     return Dismissible(
       key: ValueKey(item.id),
       direction: DismissDirection.endToStart,
@@ -428,9 +1827,188 @@ class _ListScreenState extends State<ListScreen> {
         ),
         child: const Icon(Icons.delete, color: Colors.white),
       ),
-      confirmDismiss: (_) => _confirmDeleteItem(item),
-      onDismissed: (_) => onDismissed(),
+      onDismissed: (_) => _deleteItemWithUndo(item),
       child: tile,
+    );
+  }
+
+  Future<void> _pullToRefresh() async {
+    final future = _loadAndSync();
+    if (!mounted) return;
+    setState(() => _list = future);
+    try {
+      await future;
+      await _refreshPendingCount();
+      await _refreshComparison();
+    } catch (_) {}
+  }
+
+  Widget _buildEmptyItems(ShoppaList list) {
+    return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(28, 48, 28, 28),
+      children: [
+        const Icon(
+          Icons.shopping_basket_outlined,
+          size: 48,
+          color: ShoppaColors.faint,
+        ),
+        const SizedBox(height: 16),
+        const Text(
+          'No items yet',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: ShoppaColors.ink,
+            fontSize: 18,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          list.canEdit
+              ? (_shopMode
+                  ? 'Exit shop mode to add items, or pull to refresh.'
+                  : 'Add one item, paste a list, or import from another list.')
+              : 'This list is empty.',
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: ShoppaColors.mist, fontSize: 13),
+        ),
+        if (list.canEdit && !_shopMode && !_selectMode) ...[
+          const SizedBox(height: 24),
+          FilledButton.icon(
+            onPressed: _addItem,
+            icon: const Icon(Icons.add),
+            label: const Text('Add item'),
+          ),
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: () => _bulkAddItems(fromReceipt: false),
+            icon: const Icon(Icons.playlist_add_outlined),
+            label: const Text('Paste many'),
+          ),
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: _importFromList,
+            icon: const Icon(Icons.library_add_outlined),
+            label: const Text('Import from list'),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildNoSearchMatches() {
+    return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(28, 48, 28, 28),
+      children: [
+        const Icon(Icons.search_off, size: 40, color: ShoppaColors.faint),
+        const SizedBox(height: 12),
+        const Text(
+          'No items match your search',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: ShoppaColors.mist),
+        ),
+        const SizedBox(height: 16),
+        TextButton(
+          onPressed: () {
+            _searchController.clear();
+            setState(() => _searchQuery = '');
+          },
+          child: const Text('Clear search'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildEmptyFilterState({
+    required int remainingCount,
+    required int checkedCount,
+  }) {
+    final isRemaining = _itemFilter == ItemViewFilter.remaining;
+    return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(28, 48, 28, 28),
+      children: [
+        Icon(
+          isRemaining ? Icons.check_circle_outline : Icons.radio_button_unchecked,
+          size: 48,
+          color: isRemaining ? ShoppaColors.green : ShoppaColors.faint,
+        ),
+        const SizedBox(height: 12),
+        Text(
+          isRemaining
+              ? 'Nothing left — all items are checked'
+              : 'No checked items yet',
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            color: ShoppaColors.ink,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 16),
+        FilledButton.tonal(
+          onPressed: () => setState(() => _itemFilter = ItemViewFilter.all),
+          child: Text(
+            isRemaining
+                ? 'Show all ($checkedCount checked)'
+                : 'Show all ($remainingCount left)',
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _quantityStepper(ShoppaListItem item) {
+    final qtyLabel = formatItemQuantity(item.quantity);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _qtyIconButton(
+          icon: Icons.remove,
+          onPressed: () => _nudgeQuantity(item, -1),
+        ),
+        Tooltip(
+          message: 'Tap for quantity presets',
+          child: InkWell(
+            onTap: () => _pickQuantity(item),
+            borderRadius: BorderRadius.circular(6),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+              child: Text(
+                qtyLabel,
+                style: const TextStyle(
+                  color: ShoppaColors.ink,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+        ),
+        _qtyIconButton(
+          icon: Icons.add,
+          onPressed: () => _nudgeQuantity(item, 1),
+        ),
+      ],
+    );
+  }
+
+  Widget _qtyIconButton({
+    required IconData icon,
+    required VoidCallback onPressed,
+  }) {
+    return SizedBox(
+      width: 32,
+      height: 32,
+      child: IconButton(
+        padding: EdgeInsets.zero,
+        iconSize: 18,
+        visualDensity: VisualDensity.compact,
+        color: ShoppaColors.mist,
+        icon: Icon(icon),
+        onPressed: onPressed,
+      ),
     );
   }
 
@@ -445,6 +2023,7 @@ class _ListScreenState extends State<ListScreen> {
                 item.name,
                 style: TextStyle(
                   color: ShoppaColors.ink,
+                  fontSize: _shopFocusActive ? 17 : 14,
                   fontWeight: FontWeight.w600,
                   decoration:
                       item.checked ? TextDecoration.lineThrough : null,
@@ -472,11 +2051,94 @@ class _ListScreenState extends State<ListScreen> {
           ],
         ),
         Text(
-          'Qty ${item.quantity} ${item.unit}'
-          '${item.note.isNotEmpty ? ' · ${item.note}' : ''}',
-          style: const TextStyle(color: ShoppaColors.mist, fontSize: 12),
+          '${item.unit.isEmpty ? 'ea' : item.unit}'
+          '${item.note.isNotEmpty ? ' · ${item.note}' : ''}'
+          '${item.paidPrice != null ? ' · ${formatCents(item.paidPrice!)}' : ''}'
+          '${itemNeedsPaidPrice(item) ? ' · price?' : ''}'
+          '${item.productId != null ? ' · catalogue' : ''}',
+          style: TextStyle(
+            color: itemNeedsPaidPrice(item)
+                ? ShoppaColors.amber
+                : ShoppaColors.mist,
+            fontSize: 12,
+          ),
         ),
       ],
+    );
+  }
+
+  Widget? _buildSelectBar() {
+    if (!_selectMode) return null;
+    final n = _selectedIds.length;
+    return Material(
+      elevation: 8,
+      color: ShoppaColors.panel,
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                n == 0 ? 'Select items' : '$n selected',
+                style: const TextStyle(
+                  color: ShoppaColors.ink,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: n == 0 ? null : () => _bulkSetChecked(true),
+                      child: const Text('Check'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: n == 0 ? null : () => _bulkSetChecked(false),
+                      child: const Text('Uncheck'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: FilledButton(
+                      onPressed: n == 0 ? null : _bulkDeleteSelected,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: ShoppaColors.rose,
+                      ),
+                      child: const Text('Delete'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: n == 0 ? null : () => _bulkCopyOrMove(move: false),
+                      icon: const Icon(Icons.copy_all_outlined, size: 18),
+                      label: const Text('Copy to list'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: n == 0 ? null : () => _bulkCopyOrMove(move: true),
+                      icon: const Icon(Icons.drive_file_move_outline, size: 18),
+                      label: const Text('Move to list'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -499,7 +2161,7 @@ class _ListScreenState extends State<ListScreen> {
       final result = await widget.listsRepository.exportList(
         widget.listId,
         type: type,
-        title: widget.title,
+        title: _displayTitle,
       );
       if (!mounted) return;
       if (type == 'csv' && result.textPreview != null) {
@@ -539,15 +2201,24 @@ class _ListScreenState extends State<ListScreen> {
   }
 
   Future<void> _scaleForGuests() async {
-    final guests = await showScaleGuestsSheet(context);
-    if (guests == null) return;
+    final result = await showScaleGuestsSheet(context);
+    if (result == null) return;
     try {
-      await widget.listsRepository.scaleList(widget.listId, guests: guests);
+      final guests = result['guests']?.toInt();
+      final factor = result['factor'];
+      await widget.listsRepository.scaleList(
+        widget.listId,
+        guests: guests,
+        factor: factor,
+      );
       _reload();
       if (mounted) {
+        final msg = guests != null
+            ? 'Scaled list for $guests guests'
+            : 'Scaled list by factor $factor';
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Scaled list for $guests guests'),
+            content: Text(msg),
             backgroundColor: ShoppaColors.panel2,
           ),
         );
@@ -562,6 +2233,21 @@ class _ListScreenState extends State<ListScreen> {
         );
       }
     }
+  }
+
+  Future<void> _startNewTrip(ShoppaList list) async {
+    final items = (list.items ?? []).where((i) => i.checked).toList();
+    for (final item in items) {
+      try {
+        await widget.listsRepository.setItemChecked(
+          widget.listId,
+          item.id,
+          checked: false,
+          clientUpdatedAt: DateTime.now().toUtc(),
+        );
+      } catch (_) {}
+    }
+    _reload();
   }
 
   Future<void> _togglePublish(ShoppaList list) async {
@@ -631,6 +2317,45 @@ class _ListScreenState extends State<ListScreen> {
       _shoppingAtStoreId = saved.storeId;
       _shoppingAtStoreName = saved.storeName;
     });
+    _refreshComparison();
+  }
+
+  Future<void> _linkItemToCatalogue(ShoppaListItem item) async {
+    final product = await showProductPickerSheet(
+      context,
+      catalogueRepository: widget.catalogueRepository,
+    );
+    if (product == null || !mounted) return;
+    try {
+      await widget.listsRepository.updateItem(
+        widget.listId,
+        item.id,
+        name: product.name,
+        productId: product.id,
+        clientUpdatedAt: DateTime.now().toUtc(),
+      );
+      _reload();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Linked “${product.name}” to catalogue'),
+          backgroundColor: ShoppaColors.panel2,
+        ),
+      );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message), backgroundColor: ShoppaColors.rose),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not link product: $e'),
+          backgroundColor: ShoppaColors.rose,
+        ),
+      );
+    }
   }
 
   /// SRS FR-5.3: shows per-store totals for this list. Tapping a store
@@ -656,6 +2381,7 @@ class _ListScreenState extends State<ListScreen> {
       widget.listId,
       ShoppingAtStore(storeId: selected.storeId, storeName: selected.name),
     );
+    _refreshComparison();
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Shopping at ${selected.name}')),
@@ -670,8 +2396,454 @@ class _ListScreenState extends State<ListScreen> {
     await _sessionStore.clearShoppingAt(widget.listId);
   }
 
+  /// Free-text store (aisle walk). Catalogue compare still sets a real store id.
+  Future<void> _setShoppingAtByName(String? name) async {
+    final trimmed = name?.trim() ?? '';
+    if (trimmed.isEmpty) {
+      await _clearShoppingAtStore();
+      return;
+    }
+    setState(() {
+      _shoppingAtStoreId = tripStoreSessionId(trimmed);
+      _shoppingAtStoreName = trimmed;
+      _dismissedStoreNudge = true;
+    });
+    await _sessionStore.setShoppingAt(
+      widget.listId,
+      ShoppingAtStore(
+        storeId: tripStoreSessionId(trimmed),
+        storeName: trimmed,
+      ),
+    );
+  }
+
+  Future<void> _pickShoppingAtStore() async {
+    final recentReceipts = await _receiptHistory.recent(limit: 40);
+    if (!mounted) return;
+    final picked = await showShoppingAtStoreSheet(
+      context,
+      currentStoreName: _shoppingAtStoreName,
+      suggestedStores: frequentStoreNames(recentReceipts),
+      subtitle:
+          'Sets aisle walk order. Use Compare for live catalogue prices.',
+    );
+    if (picked == null || !mounted) return;
+    if (picked.isEmpty) {
+      await _clearShoppingAtStore();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Store cleared'),
+          backgroundColor: ShoppaColors.panel2,
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+    await _setShoppingAtByName(picked);
+    if (!mounted) return;
+    final layout = resolveStoreAisleLayout(
+      storeName: picked,
+      layoutId: _aisleLayoutId,
+    );
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          _aisleLayoutId == null
+              ? 'Shopping at $picked · walk: ${layout.label}'
+              : 'Shopping at $picked',
+        ),
+        backgroundColor: ShoppaColors.panel2,
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
   void _toggleShopMode() {
-    setState(() => _shopMode = !_shopMode);
+    setState(() {
+      _shopMode = !_shopMode;
+      if (_shopMode) {
+        _exitSelectMode(notify: false);
+        if (_focusShop) {
+          _itemFilter = ItemViewFilter.remaining;
+          _searchQuery = '';
+          _searchController.clear();
+        }
+      }
+    });
+    unawaited(_syncKeepAwake());
+  }
+
+  void _cycleItemOrder() {
+    setState(() {
+      _itemOrder = _itemOrder == ItemOrderMode.manual
+          ? ItemOrderMode.name
+          : ItemOrderMode.manual;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          _itemOrder == ItemOrderMode.name
+              ? 'Items sorted A–Z'
+              : 'Items in list order',
+        ),
+        backgroundColor: ShoppaColors.panel2,
+        duration: const Duration(seconds: 1),
+      ),
+    );
+  }
+
+  void _exitSelectMode({bool notify = true}) {
+    void clear() {
+      _selectMode = false;
+      _selectedIds.clear();
+    }
+
+    if (notify) {
+      setState(clear);
+    } else {
+      clear();
+    }
+  }
+
+  void _enterSelectMode([ShoppaListItem? seed]) {
+    setState(() {
+      _selectMode = true;
+      _selectedIds.clear();
+      if (seed != null) _selectedIds.add(seed.id);
+    });
+  }
+
+  void _toggleSelected(String itemId) {
+    setState(() {
+      if (_selectedIds.contains(itemId)) {
+        _selectedIds.remove(itemId);
+      } else {
+        _selectedIds.add(itemId);
+      }
+    });
+  }
+
+  Future<void> _nudgeQuantity(ShoppaListItem item, int direction) async {
+    final next = adjustItemQuantity(item.quantity, direction);
+    if (next == item.quantity) return;
+    await _setQuantity(item, next);
+  }
+
+  Future<void> _setQuantity(ShoppaListItem item, num quantity) async {
+    if (quantity == item.quantity) return;
+    try {
+      await widget.listsRepository.updateItem(
+        widget.listId,
+        item.id,
+        quantity: quantity,
+        clientUpdatedAt: DateTime.now().toUtc(),
+      );
+      _reload();
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message), backgroundColor: ShoppaColors.rose),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not update quantity: $e'),
+          backgroundColor: ShoppaColors.rose,
+        ),
+      );
+    }
+  }
+
+  Future<void> _pickQuantity(ShoppaListItem item) async {
+    final chosen = await showModalBottomSheet<num>(
+      context: context,
+      backgroundColor: ShoppaColors.panel,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'Quantity · ${item.name}',
+                  style: const TextStyle(
+                    color: ShoppaColors.ink,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 16,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Unit: ${item.unit.isEmpty ? 'ea' : item.unit}',
+                  style: const TextStyle(color: ShoppaColors.mist, fontSize: 12),
+                ),
+                const SizedBox(height: 16),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final q in kQuantityPresets)
+                      ChoiceChip(
+                        label: Text(formatItemQuantity(q)),
+                        selected: item.quantity == q,
+                        onSelected: (_) => Navigator.pop(ctx, q),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                OutlinedButton(
+                  onPressed: () async {
+                    Navigator.pop(ctx);
+                    final custom = await _promptCustomQuantity(item);
+                    if (custom != null) await _setQuantity(item, custom);
+                  },
+                  child: const Text('Custom…'),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    if (chosen != null) await _setQuantity(item, chosen);
+  }
+
+  Future<num?> _promptCustomQuantity(ShoppaListItem item) async {
+    final controller = TextEditingController(
+      text: formatItemQuantity(item.quantity),
+    );
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Quantity for ${item.name}'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: InputDecoration(
+            labelText: 'Quantity',
+            suffixText: item.unit.isEmpty ? 'ea' : item.unit,
+          ),
+          onSubmitted: (v) => Navigator.pop(ctx, v),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, controller.text),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (result == null) return null;
+    final parsed = num.tryParse(result.trim());
+    if (parsed == null || parsed <= 0) return null;
+    return parsed;
+  }
+
+  Future<void> _bulkSetChecked(bool checked) async {
+    final ids = _selectedIds.toList();
+    if (ids.isEmpty) return;
+    for (final id in ids) {
+      try {
+        await widget.listsRepository.setItemChecked(
+          widget.listId,
+          id,
+          checked: checked,
+          clientUpdatedAt: DateTime.now().toUtc(),
+        );
+      } catch (_) {}
+    }
+    _exitSelectMode();
+    _reload();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          checked
+              ? 'Checked ${ids.length} item${ids.length == 1 ? '' : 's'}'
+              : 'Unchecked ${ids.length} item${ids.length == 1 ? '' : 's'}',
+        ),
+        backgroundColor: ShoppaColors.panel2,
+      ),
+    );
+  }
+
+  Future<void> _bulkCopyOrMove({required bool move}) async {
+    final ids = _selectedIds.toList();
+    if (ids.isEmpty) return;
+    final items = (_listSnapshot?.items ?? [])
+        .where((i) => ids.contains(i.id))
+        .toList();
+    if (items.isEmpty) return;
+
+    final dest = await showPickListSheet(
+      context,
+      listsRepository: widget.listsRepository,
+      excludeListId: widget.listId,
+      title: move ? 'Move to list' : 'Copy to list',
+    );
+    if (dest == null || !mounted) return;
+
+    var okCount = 0;
+    for (final item in items) {
+      try {
+        await widget.listsRepository.addItem(
+          dest.id,
+          name: item.name,
+          quantity: item.quantity,
+          unit: item.unit,
+          note: item.note,
+          productId: item.productId,
+        );
+        if (move) {
+          await widget.listsRepository.deleteItem(widget.listId, item.id);
+        }
+        okCount++;
+      } catch (_) {}
+    }
+    _exitSelectMode();
+    _reload();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          move
+              ? 'Moved $okCount item${okCount == 1 ? '' : 's'} to “${dest.title}”'
+              : 'Copied $okCount item${okCount == 1 ? '' : 's'} to “${dest.title}”',
+        ),
+        backgroundColor: ShoppaColors.panel2,
+      ),
+    );
+  }
+
+  Future<void> _editListDetails(ShoppaList list) async {
+    if (!list.isOwner) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Only the owner can edit list details')),
+      );
+      return;
+    }
+    final values = await showListFormDialog(
+      context,
+      title: 'Edit list',
+      initialTitle: list.title,
+      initialCategory: list.category,
+      initialRecurring: list.isRecurring,
+      initialEventName: list.eventName,
+      initialEventDate: list.eventDate,
+      showEventFields: _isProfessional,
+    );
+    if (values == null) return;
+    try {
+      final updated = await widget.listsRepository.updateList(
+        list.id,
+        title: values['title'] as String,
+        category: values['category'] as String,
+        isRecurring: values['is_recurring'] as bool,
+        eventName: values['event_name'] as String?,
+        eventDate: values['event_date'] as String?,
+      );
+      if (!mounted) return;
+      setState(() => _displayTitle = updated.title);
+      _reload();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('List updated'),
+          backgroundColor: ShoppaColors.panel2,
+        ),
+      );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message), backgroundColor: ShoppaColors.rose),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not update list: $e'),
+          backgroundColor: ShoppaColors.rose,
+        ),
+      );
+    }
+  }
+
+  Future<void> _duplicateThisList() async {
+    try {
+      final clone =
+          await widget.listsRepository.duplicateList(widget.listId);
+      if (!mounted) return;
+      context.push(
+        listDetailPath(clone.id, title: clone.title),
+      );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message), backgroundColor: ShoppaColors.rose),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not duplicate: $e'),
+          backgroundColor: ShoppaColors.rose,
+        ),
+      );
+    }
+  }
+
+  Future<void> _bulkDeleteSelected() async {
+    final ids = _selectedIds.toList();
+    if (ids.isEmpty) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove items?'),
+        content: Text(
+          'Remove ${ids.length} selected item${ids.length == 1 ? '' : 's'} '
+          'from this list?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    for (final id in ids) {
+      try {
+        await widget.listsRepository.deleteItem(widget.listId, id);
+      } catch (_) {}
+    }
+    _exitSelectMode();
+    _reload();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Removed ${ids.length} item${ids.length == 1 ? '' : 's'}',
+        ),
+        backgroundColor: ShoppaColors.panel2,
+      ),
+    );
   }
 
   /// SRS FR-4.4: a session summary of spend (and, once price_intelligence
@@ -704,72 +2876,227 @@ class _ListScreenState extends State<ListScreen> {
       list.items ?? [],
       comparison: comparison,
     );
-    await showDialog<void>(
+    final receipt = _latestReceipt;
+    final tillCmp = receipt == null
+        ? null
+        : TillVsBasket(
+            tillCents: receipt.totalCents,
+            basketCents: summary.totalSpentCents > 0
+                ? summary.totalSpentCents
+                : receipt.basketCents,
+          );
+    final action = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
         title: Text(summary.isComplete ? 'Trip complete' : 'Session summary'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '${summary.checkedItems} of ${summary.totalItems} items checked off',
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Total spent: ${summary.formattedTotalSpent}',
-              style: const TextStyle(fontWeight: FontWeight.w700),
-            ),
-            if (summary.hasSavings) ...[
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '${summary.checkedItems} of ${summary.totalItems} items checked off',
+              ),
               const SizedBox(height: 8),
               Text(
-                'You could save up to ${summary.formattedPotentialSavings} shopping at the best store',
-                style: const TextStyle(
-                  color: ShoppaColors.green,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 13,
+                'Total spent: ${summary.formattedTotalSpent}',
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              if (tillCmp != null && tillCmp.hasTill) ...[
+                const SizedBox(height: 8),
+                Text(
+                  tillCmp.shareLine,
+                  style: TextStyle(
+                    color: !tillCmp.hasComparison
+                        ? ShoppaColors.mist
+                        : (tillCmp.matches
+                            ? ShoppaColors.green
+                            : (tillCmp.over
+                                ? ShoppaColors.amber
+                                : ShoppaColors.mist)),
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
                 ),
-              ),
+                if (receipt!.storeName.isNotEmpty)
+                  Text(
+                    receipt.storeName,
+                    style: const TextStyle(
+                      color: ShoppaColors.mist,
+                      fontSize: 12,
+                    ),
+                  ),
+              ],
+              if (summary.hasSavings) ...[
+                const SizedBox(height: 8),
+                Text(
+                  'You could save up to ${summary.formattedPotentialSavings} shopping at the best store',
+                  style: const TextStyle(
+                    color: ShoppaColors.green,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+              if (summary.hasIncompletePricing) ...[
+                const SizedBox(height: 8),
+                Text(
+                  '${summary.checkedWithoutPrice} checked without a recorded price',
+                  style: const TextStyle(color: ShoppaColors.amber, fontSize: 12),
+                ),
+              ],
+              if (!summary.hasSavings) ...[
+                const SizedBox(height: 8),
+                const Text(
+                  'Link items to the catalogue to see savings vs other stores.',
+                  style: TextStyle(color: ShoppaColors.mist, fontSize: 12),
+                ),
+              ],
             ],
-            if (summary.hasIncompletePricing) ...[
-              const SizedBox(height: 8),
-              Text(
-                '${summary.checkedWithoutPrice} checked without a recorded price',
-                style: const TextStyle(color: ShoppaColors.mist, fontSize: 12),
-              ),
-            ],
-            if (!summary.hasSavings) ...[
-              const SizedBox(height: 8),
-              const Text(
-                'Link items to the catalogue to see savings vs other stores.',
-                style: TextStyle(color: ShoppaColors.mist, fontSize: 12),
-              ),
-            ],
-          ],
+          ),
         ),
         actions: [
+          if (summary.checkedItems > 0)
+            TextButton(
+              onPressed: () => Navigator.of(context).pop('share_recap'),
+              child: const Text('Share recap'),
+            ),
+          if (list.canEdit && summary.checkedItems > 0)
+            TextButton(
+              onPressed: () => Navigator.of(context).pop('log_receipt'),
+              child: const Text('Log receipt'),
+            ),
+          if (summary.hasIncompletePricing && list.canEdit)
+            TextButton(
+              onPressed: () => Navigator.of(context).pop('fill_prices'),
+              child: const Text('Add missing prices'),
+            ),
+          if (summary.checkedItems > 0 && list.canEdit)
+            TextButton(
+              onPressed: () => Navigator.of(context).pop('new_trip'),
+              child: const Text('Start new trip'),
+            ),
           TextButton(
-            onPressed: () => Navigator.of(context).pop(),
+            onPressed: () => Navigator.of(context).pop('keep'),
             child: const Text('Keep shopping'),
           ),
           FilledButton(
-            onPressed: () => Navigator.of(context).pop(),
+            onPressed: () => Navigator.of(context).pop('done'),
             child: const Text('Done'),
           ),
         ],
       ),
     );
+    if (action == 'share_recap' && mounted) {
+      await _shareSessionRecap(list, summary: summary);
+    } else if (action == 'log_receipt' && mounted) {
+      await _logReceipt(list);
+    } else if (action == 'fill_prices' && mounted) {
+      await _fillMissingPrices(list);
+    } else if (action == 'new_trip' && mounted) {
+      await _startNewTrip(list);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Checked items cleared — ready for a new trip'),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _shareSessionRecap(
+    ShoppaList list, {
+    SessionSummary? summary,
+  }) async {
+    final receipt = _latestReceipt;
+    final text = formatSessionRecapAsText(
+      list,
+      summary: summary,
+      tillCents: receipt?.totalCents,
+      basketCents: receipt != null
+          ? (receipt.basketCents > 0
+              ? receipt.basketCents
+              : (summary?.totalSpentCents ??
+                  tripSpend(list.items ?? const []).spentCents))
+          : null,
+    );
+    final box = context.findRenderObject() as RenderBox?;
+    final origin =
+        box != null ? box.localToGlobal(Offset.zero) & box.size : null;
+    try {
+      await Share.share(
+        text,
+        subject: '${list.title} · trip recap',
+        sharePositionOrigin: origin,
+      );
+    } catch (_) {
+      await Clipboard.setData(ClipboardData(text: text));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Share unavailable — recap copied'),
+          backgroundColor: ShoppaColors.panel2,
+        ),
+      );
+    }
   }
 
   Future<void> _onOverflowAction(String value, ShoppaList? list) async {
-    if (value == 'compare') {
+    if (value == 'set_store') {
+      await _pickShoppingAtStore();
+    } else if (value == 'compare') {
       await _openComparisonSheet();
+    } else if (value == 'aisle_order') {
+      setState(() => _aisleOrder = !_aisleOrder);
+    } else if (value == 'collapse_aisles') {
+      final items = list?.items ?? _listSnapshot?.items ?? const [];
+      setState(() {
+        for (final s in shopAisleSections(
+          items,
+          includeChecked: true,
+          separateChecked: true,
+          layout: _activeAisleLayout,
+        )) {
+          _collapsedAisleIds.add(s.aisle.id);
+        }
+      });
+    } else if (value == 'expand_aisles') {
+      setState(() => _collapsedAisleIds.clear());
+    } else if (value == 'aisle_layout') {
+      await _pickAisleLayout();
+    } else if (value == 'item_order') {
+      _cycleItemOrder();
+    } else if (value == 'skip_price') {
+      await _toggleSkipPricePrompt();
+    } else if (value == 'focus_shop') {
+      await _toggleFocusShop();
+    } else if (value == 'keep_screen') {
+      await _toggleKeepScreenOn();
     } else if (value == 'chat') {
       _openChatSheet();
     } else if (value == 'activity') {
       _openActivitySheet();
     } else if (value == 'share') {
       if (list != null) _openShareSheet(list);
+    } else if (value == 'copy_text') {
+      await _copyListAsText(list);
+    } else if (value == 'edit_list') {
+      if (list != null) await _editListDetails(list);
+    } else if (value == 'duplicate_list') {
+      await _duplicateThisList();
+    } else if (value == 'uncheck_all') {
+      if (list != null && list.canEdit) await _uncheckAll(list);
+    } else if (value == 'remove_checked') {
+      if (list != null && list.canEdit) await _removeCheckedItems(list);
+    } else if (value == 'fill_prices') {
+      if (list != null && list.canEdit) await _fillMissingPrices(list);
+    } else if (value == 'log_receipt') {
+      if (list != null && list.canEdit) await _logReceipt(list);
+    } else if (value == 'receipt_history') {
+      await _showReceiptHistory();
+    } else if (value == 'select') {
+      if (list != null && list.canEdit) _enterSelectMode();
     } else if (value == 'export_csv') {
       await _exportList('csv');
     } else if (value == 'export_pdf') {
@@ -781,9 +3108,203 @@ class _ListScreenState extends State<ListScreen> {
     }
   }
 
+  /// Check off every open item still in [section] (no price prompts — fast walk).
+  Future<void> _checkOffAisle(AisleSection section, ShoppaList list) async {
+    if (!list.canEdit || section.aisle.id == 'checked') {
+      if (!list.canEdit) _showViewOnlySnack();
+      return;
+    }
+    final fromSection = section.items.where((i) => !i.checked).toList();
+    final allOpen = openListItemsInAisle(
+      list.items ?? const [],
+      section.aisle.id,
+    );
+    final targets = fromSection.isNotEmpty ? fromSection : allOpen;
+    if (targets.isEmpty) return;
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Done with ${section.aisle.label}?'),
+        content: Text(
+          '${formatAisleCheckOffMessage(aisleLabel: section.aisle.label, count: targets.length)} '
+          'Prices are not recorded — set them later if needed.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(
+              targets.length == 1
+                  ? 'Check off 1'
+                  : 'Check off ${targets.length}',
+            ),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+
+    final ids = targets.map((t) => t.id).toList();
+    try {
+      for (final item in targets) {
+        await widget.listsRepository.setItemChecked(
+          widget.listId,
+          item.id,
+          checked: true,
+          clientUpdatedAt: DateTime.now().toUtc(),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not update aisle: $e'),
+          backgroundColor: ShoppaColors.rose,
+        ),
+      );
+      return;
+    }
+    HapticFeedback.mediumImpact();
+    final snapItems = _listSnapshot?.items ?? const <ShoppaListItem>[];
+    final idSet = ids.toSet();
+    final projectedItems = snapItems.map((i) {
+      if (!idSet.contains(i.id)) return i;
+      return ShoppaListItem(
+        id: i.id,
+        name: i.name,
+        quantity: i.quantity,
+        unit: i.unit,
+        note: i.note,
+        checked: true,
+        paidPrice: i.paidPrice,
+        productId: i.productId,
+        position: i.position,
+        hasPromotion: i.hasPromotion,
+      );
+    }).toList();
+    final nextAisle = nextOpenAisleGroup(
+      projectedItems,
+      layout: _activeAisleLayout,
+      afterAisleId: section.aisle.id,
+    );
+    setState(() {
+      _collapsedAisleIds.add(section.aisle.id);
+      if (nextAisle != null) {
+        _collapsedAisleIds.remove(nextAisle.id);
+      }
+    });
+    _reload();
+    if (!mounted) return;
+
+    final allDone = snapItems.isNotEmpty &&
+        snapItems.every((i) => i.checked || idSet.contains(i.id));
+    if (allDone) {
+      try {
+        final refreshed = await _list;
+        if (!mounted) return;
+        if (listProgress(refreshed.items ?? const []).isComplete) {
+          await _openSessionSummary(refreshed);
+          return;
+        }
+      } catch (_) {}
+    }
+
+    final base = targets.length == 1
+        ? 'Checked off 1 in ${section.aisle.label}'
+        : 'Checked off ${targets.length} in ${section.aisle.label}';
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          nextAisle == null
+              ? base
+              : '$base · ${formatNextAisleHint(nextAisle)}',
+        ),
+        backgroundColor: ShoppaColors.panel2,
+        action: SnackBarAction(
+          label: 'Undo',
+          textColor: ShoppaColors.amber,
+          onPressed: () async {
+            try {
+              for (final id in ids) {
+                await widget.listsRepository.setItemChecked(
+                  widget.listId,
+                  id,
+                  checked: false,
+                  clientUpdatedAt: DateTime.now().toUtc(),
+                );
+              }
+              _reload();
+            } catch (_) {}
+          },
+        ),
+      ),
+    );
+  }
+
+  /// Sticky aisle header + item rows for one shop-mode section.
+  List<Widget> _listAisleSlivers({
+    required AisleSection section,
+    required ShoppaList list,
+  }) {
+    final aisleId = section.aisle.id;
+    final collapsed = _collapsedAisleIds.contains(aisleId);
+    final openInSection =
+        section.items.where((i) => !i.checked).length;
+    return [
+      SliverPersistentHeader(
+        pinned: true,
+        delegate: _AisleStickyHeaderDelegate(
+          label: section.aisle.label,
+          countLabel: collapsed
+              ? '$openInSection left'
+              : '${section.items.length}',
+          collapsed: collapsed,
+          onToggle: () {
+            setState(() {
+              if (collapsed) {
+                _collapsedAisleIds.remove(aisleId);
+              } else {
+                _collapsedAisleIds.add(aisleId);
+              }
+            });
+          },
+          onCheckOffAisle: openInSection > 0 &&
+                  aisleId != 'checked' &&
+                  list.canEdit
+              ? () => _checkOffAisle(section, list)
+              : null,
+        ),
+      ),
+      if (!collapsed)
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+          sliver: SliverList(
+            delegate: SliverChildBuilderDelegate(
+              (context, index) {
+                final item = section.items[index];
+                return _buildItemTile(
+                  item: item,
+                  list: list,
+                  index: index,
+                  onDismissed: null,
+                );
+              },
+              childCount: section.items.length,
+            ),
+          ),
+        ),
+    ];
+  }
+
   Widget _buildProgressStrip(ShoppaList list, ListProgress progress) {
-    if (!progress.hasItems) return const SizedBox.shrink();
-    final canTap = progress.checked > 0;
+    final canTap = progress.hasItems && progress.checked > 0;
+    final spend = tripSpend(list.items ?? const []);
+    final cat = listCategoryStyle(list.category);
     return Material(
       color: ShoppaColors.panel2.withOpacity(0.45),
       child: InkWell(
@@ -795,56 +3316,231 @@ class _ListScreenState extends State<ListScreen> {
             children: [
               Row(
                 children: [
-                  Expanded(
-                    child: Text(
-                      '${progress.checked} of ${progress.total} checked'
-                      ' · ${progress.percent}%',
-                      style: const TextStyle(
-                        color: ShoppaColors.ink,
-                        fontSize: 13,
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: cat.color.withOpacity(0.16),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: cat.color.withOpacity(0.4)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(cat.icon, size: 14, color: cat.color),
+                        const SizedBox(width: 5),
+                        Text(
+                          cat.label,
+                          style: TextStyle(
+                            color: cat.color,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (list.isRecurring) ...[
+                    const SizedBox(width: 8),
+                    const Text(
+                      'Recurring',
+                      style: TextStyle(
+                        color: ShoppaColors.mist,
+                        fontSize: 11,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
-                  ),
-                  if (progress.remaining > 0)
-                    Text(
-                      '${progress.remaining} left',
-                      style: const TextStyle(
-                        color: ShoppaColors.mist,
-                        fontSize: 12,
-                      ),
-                    )
-                  else
-                    const Text(
-                      'All done',
-                      style: TextStyle(
-                        color: ShoppaColors.green,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  if (canTap) ...[
-                    const SizedBox(width: 6),
-                    const Icon(
-                      Icons.receipt_long_outlined,
-                      size: 16,
-                      color: ShoppaColors.mist,
-                    ),
                   ],
+                  if (list.eventName.isNotEmpty) ...[
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        list.eventName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: ShoppaColors.mist,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ),
+                  ] else
+                    const Spacer(),
                 ],
               ),
-              const SizedBox(height: 8),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(4),
-                child: LinearProgressIndicator(
-                  value: progress.fraction,
-                  minHeight: 6,
-                  backgroundColor: ShoppaColors.line,
-                  color: progress.isComplete
-                      ? ShoppaColors.green
-                      : ShoppaColors.amber,
+              if (progress.hasItems) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '${progress.checked} of ${progress.total} checked'
+                        ' · ${progress.percent}%',
+                        style: const TextStyle(
+                          color: ShoppaColors.ink,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    if (progress.remaining > 0)
+                      Text(
+                        '${progress.remaining} left',
+                        style: const TextStyle(
+                          color: ShoppaColors.mist,
+                          fontSize: 12,
+                        ),
+                      )
+                    else
+                      const Text(
+                        'All done',
+                        style: TextStyle(
+                          color: ShoppaColors.green,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    if (canTap) ...[
+                      const SizedBox(width: 6),
+                      const Icon(
+                        Icons.receipt_long_outlined,
+                        size: 16,
+                        color: ShoppaColors.mist,
+                      ),
+                    ],
+                  ],
                 ),
+              ],
+              if (spend.hasSpend) ...[
+                const SizedBox(height: 4),
+                Text(
+                  spend.hasIncompletePricing
+                      ? 'Spent ${spend.formatted} · ${spend.pricedCount}/${spend.checkedCount} priced'
+                      : 'Spent ${spend.formatted}',
+                  style: const TextStyle(
+                    color: ShoppaColors.green,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+              Builder(
+                builder: (context) {
+                  final leftEst = estimateRemainingSpend(
+                    list.items ?? const [],
+                    rememberedByName: _lastPaidSnapshot,
+                  );
+                  final projected = formatProjectedTripTotal(
+                    spentCents: spend.spentCents,
+                    leftEstCents: leftEst.estimatedCents,
+                  );
+                  if (!leftEst.hasEstimate && projected == null) {
+                    return const SizedBox.shrink();
+                  }
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      [
+                        if (leftEst.hasEstimate) leftEst.summaryLine,
+                        if (projected != null) projected,
+                      ].join(' · '),
+                      style: const TextStyle(
+                        color: ShoppaColors.mist,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  );
+                },
               ),
+              if (_latestReceipt != null) ...[
+                const SizedBox(height: 4),
+                GestureDetector(
+                  onTap: _showReceiptHistory,
+                  child: Builder(
+                    builder: (context) {
+                      final receipt = _latestReceipt!;
+                      // Prefer live basket when spend exists; else snapshot at log.
+                      final liveBasket = spend.spentCents;
+                      final cmp = TillVsBasket(
+                        tillCents: receipt.totalCents,
+                        basketCents: liveBasket > 0
+                            ? liveBasket
+                            : receipt.basketCents,
+                      );
+                      final when = formatRelativeTime(receipt.createdAt);
+                      final store = receipt.storeName.isNotEmpty
+                          ? ' · ${receipt.storeName}'
+                          : '';
+                      final whenBit = when.isNotEmpty ? ' · $when' : '';
+                      final line = cmp.hasComparison
+                          ? '${cmp.summaryLine}$store$whenBit'
+                          : 'Last till ${receipt.formattedTotal}$store$whenBit';
+                      final color = !cmp.hasComparison
+                          ? ShoppaColors.mist
+                          : (cmp.matches
+                              ? ShoppaColors.green
+                              : (cmp.over
+                                  ? ShoppaColors.amber
+                                  : ShoppaColors.mist));
+                      return Text(
+                        line,
+                        style: TextStyle(
+                          color: color,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+              if (_comparison != null && !_comparison!.isEmpty) ...[
+                const SizedBox(height: 4),
+                Builder(
+                  builder: (context) {
+                    final store = pickComparisonStore(
+                      _comparison!,
+                      preferredStoreId: _observationStoreId,
+                    );
+                    if (store == null) return const SizedBox.shrink();
+                    final label = _observationStoreId != null &&
+                            store.storeId == _observationStoreId
+                        ? 'Est. ${formatCents(store.total)} at ${store.name}'
+                        : 'Best est. ${formatCents(store.total)} at ${store.name}';
+                    final saves = _comparison!.bestSaves;
+                    final saveHint = saves != null &&
+                            saves > 0 &&
+                            store.storeId != _comparison!.bestStoreId
+                        ? ' · save up to ${formatCents(saves)} elsewhere'
+                        : '';
+                    return Text(
+                      '$label$saveHint',
+                      style: const TextStyle(
+                        color: ShoppaColors.mist,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    );
+                  },
+                ),
+              ],
+              if (progress.hasItems) ...[
+                const SizedBox(height: 8),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: LinearProgressIndicator(
+                    value: progress.fraction,
+                    minHeight: 6,
+                    backgroundColor: ShoppaColors.line,
+                    color: progress.isComplete
+                        ? ShoppaColors.green
+                        : cat.color,
+                  ),
+                ),
+              ],
             ],
           ),
         ),
@@ -856,46 +3552,171 @@ class _ListScreenState extends State<ListScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(_shopMode ? 'Shopping · ${widget.title}' : widget.title),
+        leading: _selectMode
+            ? IconButton(
+                icon: const Icon(Icons.close),
+                tooltip: 'Cancel selection',
+                onPressed: _exitSelectMode,
+              )
+            : null,
+        title: Text(
+          _selectMode
+              ? (_selectedIds.isEmpty
+                  ? 'Select items'
+                  : '${_selectedIds.length} selected')
+              : (_shopMode
+                  ? 'Shopping · $_displayTitle'
+                  : _displayTitle),
+        ),
         actions: [
-          IconButton(
-            tooltip: _shopMode ? 'Exit shop mode' : 'Shop mode',
-            icon: Icon(
-              _shopMode ? Icons.shopping_cart : Icons.shopping_cart_outlined,
-            ),
-            onPressed: _toggleShopMode,
-          ),
-          FutureBuilder<ShoppaList>(
-            future: _list,
-            builder: (context, snapshot) {
-              final list = snapshot.data;
-              return IconButton(
-                tooltip: 'Finish shopping',
-                icon: const Icon(Icons.receipt_long_outlined),
-                onPressed:
-                    list == null ? null : () => _openSessionSummary(list),
-              );
-            },
-          ),
-          if (!_shopMode)
+          if (!_selectMode) ...[
             IconButton(
-              tooltip: 'Compare prices',
-              icon: const Icon(Icons.storefront_outlined),
-              onPressed: _openComparisonSheet,
+              tooltip: _shopMode ? 'Exit shop mode' : 'Shop mode',
+              icon: Icon(
+                _shopMode ? Icons.shopping_cart : Icons.shopping_cart_outlined,
+              ),
+              onPressed: _toggleShopMode,
             ),
+            if (_shopMode)
+              IconButton(
+                tooltip: _focusShop ? 'Exit focus mode' : 'Focus mode',
+                icon: Icon(
+                  _focusShop
+                      ? Icons.center_focus_strong
+                      : Icons.center_focus_weak_outlined,
+                  color: _focusShop ? ShoppaColors.amber : null,
+                ),
+                onPressed: _toggleFocusShop,
+              ),
+            if (!_shopFocusActive)
+              FutureBuilder<ShoppaList>(
+                future: _list,
+                builder: (context, snapshot) {
+                  final list = snapshot.data;
+                  return IconButton(
+                    tooltip: 'Finish shopping',
+                    icon: const Icon(Icons.receipt_long_outlined),
+                    onPressed:
+                        list == null ? null : () => _openSessionSummary(list),
+                  );
+                },
+              ),
+            if (!_shopMode)
+              IconButton(
+                tooltip: 'Compare prices',
+                icon: const Icon(Icons.storefront_outlined),
+                onPressed: _openComparisonSheet,
+              ),
+          ],
           FutureBuilder<ShoppaList>(
             future: _list,
             builder: (context, snapshot) {
               final list = snapshot.data;
+              if (_selectMode) {
+                final allIds = (list?.items ?? []).map((i) => i.id).toList();
+                final allSelected =
+                    allIds.isNotEmpty && _selectedIds.length == allIds.length;
+                return IconButton(
+                  tooltip: allSelected ? 'Clear selection' : 'Select all',
+                  icon: Icon(
+                    allSelected ? Icons.deselect : Icons.select_all,
+                  ),
+                  onPressed: allIds.isEmpty
+                      ? null
+                      : () {
+                          setState(() {
+                            if (allSelected) {
+                              _selectedIds.clear();
+                            } else {
+                              _selectedIds
+                                ..clear()
+                                ..addAll(allIds);
+                            }
+                          });
+                        },
+                );
+              }
               return PopupMenuButton<String>(
                 tooltip: 'More',
                 onSelected: (value) => _onOverflowAction(value, list),
                 itemBuilder: (context) {
                   final items = <PopupMenuEntry<String>>[
                     if (_shopMode)
+                      PopupMenuItem(
+                        value: 'set_store',
+                        child: Text(
+                          _shoppingAtStoreName != null &&
+                                  _shoppingAtStoreName!.trim().isNotEmpty
+                              ? 'Change store ($_shoppingAtStoreName)'
+                              : 'Set store',
+                        ),
+                      ),
+                    if (_shopMode)
                       const PopupMenuItem(
                         value: 'compare',
-                        child: Text('Compare / set store'),
+                        child: Text('Compare prices'),
+                      ),
+                    if (_shopMode)
+                      PopupMenuItem(
+                        value: 'aisle_order',
+                        child: Text(
+                          _aisleOrder && _itemOrder == ItemOrderMode.manual
+                              ? 'Simple order (no aisles)'
+                              : 'Sort by aisle',
+                        ),
+                      ),
+                    if (_shopMode && _aisleOrder)
+                      PopupMenuItem(
+                        value: 'aisle_layout',
+                        child: Text(
+                          'Aisle walk: ${_activeAisleLayout.label}',
+                        ),
+                      ),
+                    if (_shopMode && _aisleOrder)
+                      if (_collapsedAisleIds.isNotEmpty)
+                        const PopupMenuItem(
+                          value: 'expand_aisles',
+                          child: Text('Expand all aisles'),
+                        )
+                      else
+                        const PopupMenuItem(
+                          value: 'collapse_aisles',
+                          child: Text('Collapse all aisles'),
+                        ),
+                    PopupMenuItem(
+                      value: 'item_order',
+                      child: Text(
+                        _itemOrder == ItemOrderMode.name
+                            ? 'List order (manual)'
+                            : 'Sort items A–Z',
+                      ),
+                    ),
+                    if (_shopMode)
+                      PopupMenuItem(
+                        value: 'skip_price',
+                        child: Text(
+                          _skipPricePrompt
+                              ? 'Ask price on check-off'
+                              : 'Fast check-off (skip price)',
+                        ),
+                      ),
+                    if (_shopMode)
+                      PopupMenuItem(
+                        value: 'focus_shop',
+                        child: Text(
+                          _focusShop
+                              ? 'Exit focus mode'
+                              : 'Focus mode (bigger checks)',
+                        ),
+                      ),
+                    if (_shopMode)
+                      PopupMenuItem(
+                        value: 'keep_screen',
+                        child: Text(
+                          _keepScreenOn
+                              ? 'Allow screen to sleep'
+                              : 'Keep screen on',
+                        ),
                       ),
                     const PopupMenuItem(
                       value: 'chat',
@@ -907,7 +3728,51 @@ class _ListScreenState extends State<ListScreen> {
                     ),
                     const PopupMenuItem(
                       value: 'share',
-                      child: Text('Share'),
+                      child: Text('Invite collaborators'),
+                    ),
+                    const PopupMenuItem(
+                      value: 'copy_text',
+                      child: Text('Share / copy as text'),
+                    ),
+                    if (list != null && list.isOwner)
+                      const PopupMenuItem(
+                        value: 'edit_list',
+                        child: Text('Edit list details'),
+                      ),
+                    const PopupMenuItem(
+                      value: 'duplicate_list',
+                      child: Text('Duplicate list'),
+                    ),
+                    if (list != null && list.canEdit)
+                      const PopupMenuItem(
+                        value: 'select',
+                        child: Text('Select items'),
+                      ),
+                    if (list != null && list.canEdit)
+                      const PopupMenuItem(
+                        value: 'uncheck_all',
+                        child: Text('Uncheck all (new trip)'),
+                      ),
+                    if (list != null && list.canEdit)
+                      const PopupMenuItem(
+                        value: 'remove_checked',
+                        child: Text('Remove checked items'),
+                      ),
+                    if (list != null &&
+                        list.canEdit &&
+                        itemsMissingPaidPrice(list.items ?? const []).isNotEmpty)
+                      const PopupMenuItem(
+                        value: 'fill_prices',
+                        child: Text('Add missing prices'),
+                      ),
+                    if (list != null && list.canEdit)
+                      const PopupMenuItem(
+                        value: 'log_receipt',
+                        child: Text('Log receipt / till total'),
+                      ),
+                    const PopupMenuItem(
+                      value: 'receipt_history',
+                      child: Text('Receipt history'),
                     ),
                     const PopupMenuItem(
                       value: 'export_csv',
@@ -950,22 +3815,68 @@ class _ListScreenState extends State<ListScreen> {
           }
           if (snapshot.hasError) {
             return Center(
-              child: Text(
-                'Could not load list: ${snapshot.error}',
-                style: const TextStyle(color: ShoppaColors.rose),
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Could not load list: ${snapshot.error}',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: ShoppaColors.rose),
+                    ),
+                    const SizedBox(height: 16),
+                    FilledButton(
+                      onPressed: _pullToRefresh,
+                      child: const Text('Retry'),
+                    ),
+                  ],
+                ),
               ),
             );
           }
           final list = snapshot.data!;
           final rawItems = list.items ?? [];
           final progress = listProgress(rawItems);
-          final items = itemsForDisplay(rawItems, shopMode: _shopMode);
+          final searchMatched = filterListItems(rawItems, _searchQuery);
+          final filtered = applyItemViewFilter(searchMatched, _itemFilter);
+          // Aisle walk order only when not sorting A–Z.
+          final useAisle = _shopMode &&
+              _aisleOrder &&
+              _itemOrder == ItemOrderMode.manual &&
+              _searchQuery.trim().isEmpty &&
+              _itemFilter != ItemViewFilter.checked;
+          final items = useAisle
+              ? filtered
+              : itemsForDisplay(
+                  filtered,
+                  shopMode: _shopMode,
+                  order: _itemOrder,
+                );
+          final aisleSections = useAisle
+              ? shopAisleSections(
+                  filtered,
+                  includeChecked: _itemFilter == ItemViewFilter.all,
+                  separateChecked: _itemFilter == ItemViewFilter.all,
+                  layout: _activeAisleLayout,
+                )
+              : null;
+          final checkedCount =
+              rawItems.where((i) => i.checked).length;
+          final remainingCount = rawItems.length - checkedCount;
           final showStoreNudge = !_dismissedStoreNudge &&
               list.canEdit &&
               rawItems.isNotEmpty &&
               _shoppingAtStoreName == null;
-          final allowReorder = list.canEdit && !_shopMode;
-          return Column(
+          final allowReorder = list.canEdit &&
+              !_shopMode &&
+              !_selectMode &&
+              _searchQuery.trim().isEmpty &&
+              _itemOrder == ItemOrderMode.manual &&
+              _itemFilter == ItemViewFilter.all;
+          return RefreshIndicator(
+            onRefresh: _pullToRefresh,
+            child: Column(
             children: [
               if (!_shopMode)
                 PresenceBanner(
@@ -994,11 +3905,111 @@ class _ListScreenState extends State<ListScreen> {
                   color: ShoppaColors.mist,
                 ),
               _buildProgressStrip(list, progress),
-              if (showStoreNudge)
+              if (!_shopFocusActive)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                  child: TextField(
+                    controller: _searchController,
+                    onChanged: (v) => setState(() => _searchQuery = v),
+                    decoration: InputDecoration(
+                      hintText: 'Search items…',
+                      prefixIcon: const Icon(Icons.search, size: 20),
+                      isDense: true,
+                      suffixIcon: _searchQuery.isEmpty
+                          ? null
+                          : IconButton(
+                              icon: const Icon(Icons.clear, size: 18),
+                              onPressed: () {
+                                _searchController.clear();
+                                setState(() => _searchQuery = '');
+                              },
+                            ),
+                    ),
+                  ),
+                ),
+              if (!_shopFocusActive && rawItems.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        FilterChip(
+                          label: Text('All (${rawItems.length})'),
+                          selected: _itemFilter == ItemViewFilter.all,
+                          onSelected: (_) => setState(
+                            () => _itemFilter = ItemViewFilter.all,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        FilterChip(
+                          label: Text('Left ($remainingCount)'),
+                          selected: _itemFilter == ItemViewFilter.remaining,
+                          onSelected: (_) => setState(
+                            () => _itemFilter = ItemViewFilter.remaining,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        FilterChip(
+                          label: Text('Checked ($checkedCount)'),
+                          selected: _itemFilter == ItemViewFilter.checked,
+                          onSelected: (_) => setState(
+                            () => _itemFilter = ItemViewFilter.checked,
+                          ),
+                        ),
+                        if (_itemOrder == ItemOrderMode.name) ...[
+                          const SizedBox(width: 8),
+                          InputChip(
+                            avatar: const Icon(Icons.sort_by_alpha, size: 16),
+                            label: const Text('A–Z'),
+                            onPressed: _cycleItemOrder,
+                            onDeleted: _cycleItemOrder,
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              if (_shopMode && !_shopFocusActive && _searchQuery.trim().isEmpty)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      _itemOrder == ItemOrderMode.name
+                          ? 'Sorted A–Z · swipe right to check'
+                          : (_aisleOrder
+                              ? 'Sorted by aisle · swipe right to check'
+                              : 'Swipe right to check · tap qty for presets'),
+                      style: const TextStyle(
+                        color: ShoppaColors.mist,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ),
+                ),
+              if (_shopFocusActive)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      remainingCount == 0
+                          ? 'All done · swipe or tap to uncheck'
+                          : '$remainingCount left · swipe right to check',
+                      style: const TextStyle(
+                        color: ShoppaColors.mist,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+              if (showStoreNudge && !_shopFocusActive)
                 Material(
                   color: ShoppaColors.amber.withOpacity(0.12),
                   child: InkWell(
-                    onTap: _openComparisonSheet,
+                    onTap: _pickShoppingAtStore,
                     child: Padding(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 16,
@@ -1008,7 +4019,7 @@ class _ListScreenState extends State<ListScreen> {
                         children: [
                           const Expanded(
                             child: Text(
-                              'Set store for better price suggestions',
+                              'Set store for aisle walk order',
                               style: TextStyle(
                                 color: ShoppaColors.ink,
                                 fontSize: 13,
@@ -1046,83 +4057,247 @@ class _ListScreenState extends State<ListScreen> {
                   },
                 ),
               if (_shoppingAtStoreName != null)
-                Container(
-                  width: double.infinity,
+                Material(
                   color: ShoppaColors.panel2.withOpacity(0.6),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          'Shopping at $_shoppingAtStoreName',
-                          style: const TextStyle(
-                            color: ShoppaColors.green,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
+                  child: InkWell(
+                    onTap: _pickShoppingAtStore,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              'Shopping at $_shoppingAtStoreName',
+                              style: const TextStyle(
+                                color: ShoppaColors.green,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
                           ),
-                        ),
+                          if (!isCatalogueStoreId(_shoppingAtStoreId))
+                            const Padding(
+                              padding: EdgeInsets.only(right: 8),
+                              child: Text(
+                                'aisles',
+                                style: TextStyle(
+                                  color: ShoppaColors.mist,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          GestureDetector(
+                            onTap: _clearShoppingAtStore,
+                            child: const Icon(
+                              Icons.close,
+                              size: 16,
+                              color: ShoppaColors.mist,
+                            ),
+                          ),
+                        ],
                       ),
-                      GestureDetector(
-                        onTap: _clearShoppingAtStore,
-                        child: const Icon(
-                          Icons.close,
-                          size: 16,
-                          color: ShoppaColors.mist,
-                        ),
+                    ),
+                  ),
+                ),
+              if (_shopMode &&
+                  _aisleOrder &&
+                  _itemOrder == ItemOrderMode.manual)
+                Material(
+                  color: ShoppaColors.panel2.withOpacity(0.35),
+                  child: InkWell(
+                    onTap: _pickAisleLayout,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 6,
                       ),
-                    ],
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.route_outlined,
+                            size: 16,
+                            color: ShoppaColors.amber,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              _aisleLayoutId == null
+                                  ? 'Walk order: ${_activeAisleLayout.label} (auto)'
+                                  : 'Walk order: ${_activeAisleLayout.label}',
+                              style: const TextStyle(
+                                color: ShoppaColors.mist,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                          const Icon(
+                            Icons.expand_more,
+                            size: 16,
+                            color: ShoppaColors.mist,
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
               Expanded(
-                child: items.isEmpty
-                    ? const Center(
-                        child: Text(
-                          'No items yet',
-                          style: TextStyle(color: ShoppaColors.mist),
-                        ),
-                      )
-                    : allowReorder
-                        ? ReorderableListView.builder(
-                            padding: const EdgeInsets.all(16),
-                            buildDefaultDragHandles: false,
-                            itemCount: items.length,
-                            onReorder: (oldIndex, newIndex) =>
-                                _onReorder(items, oldIndex, newIndex),
-                            itemBuilder: (context, index) {
-                              final item = items[index];
-                              return _buildItemTile(
-                                item: item,
-                                list: list,
-                                index: index,
-                                reorderable: true,
-                                onDismissed: () => widget.listsRepository
-                                    .deleteItem(widget.listId, item.id)
-                                    .then((_) => _reload()),
-                              );
-                            },
-                          )
-                        : ListView.separated(
-                            padding: const EdgeInsets.all(16),
-                            itemCount: items.length,
-                            separatorBuilder: (_, __) =>
-                                const SizedBox(height: 10),
-                            itemBuilder: (context, index) {
-                              final item = items[index];
-                              return _buildItemTile(
-                                item: item,
-                                list: list,
-                                index: index,
-                                onDismissed: list.canEdit && !_shopMode
-                                    ? () => widget.listsRepository
-                                        .deleteItem(widget.listId, item.id)
-                                        .then((_) => _reload())
-                                    : null,
-                              );
-                            },
-                          ),
+                child: rawItems.isEmpty
+                    ? _buildEmptyItems(list)
+                    : searchMatched.isEmpty
+                        ? _buildNoSearchMatches()
+                        : filtered.isEmpty
+                            ? _buildEmptyFilterState(
+                                remainingCount: remainingCount,
+                                checkedCount: checkedCount,
+                              )
+                        : aisleSections != null
+                            ? CustomScrollView(
+                                physics:
+                                    const AlwaysScrollableScrollPhysics(),
+                                slivers: [
+                                  const SliverToBoxAdapter(
+                                    child: SizedBox(height: 8),
+                                  ),
+                                  for (final section in aisleSections)
+                                    ..._listAisleSlivers(
+                                      section: section,
+                                      list: list,
+                                    ),
+                                  const SliverToBoxAdapter(
+                                    child: SizedBox(height: 8),
+                                  ),
+                                ],
+                              )
+                            : allowReorder
+                                ? ReorderableListView.builder(
+                                    physics:
+                                        const AlwaysScrollableScrollPhysics(),
+                                    padding: const EdgeInsets.all(16),
+                                    buildDefaultDragHandles: false,
+                                    itemCount: items.length,
+                                    onReorder: (oldIndex, newIndex) =>
+                                        _onReorder(items, oldIndex, newIndex),
+                                    itemBuilder: (context, index) {
+                                      final item = items[index];
+                                      return _buildItemTile(
+                                        item: item,
+                                        list: list,
+                                        index: index,
+                                        reorderable: true,
+                                        // Non-null enables swipe-to-delete + Undo.
+                                        onDismissed: () {},
+                                      );
+                                    },
+                                  )
+                                : ListView.separated(
+                                    physics:
+                                        const AlwaysScrollableScrollPhysics(),
+                                    padding: const EdgeInsets.all(16),
+                                    itemCount: items.length,
+                                    separatorBuilder: (_, __) =>
+                                        const SizedBox(height: 10),
+                                    itemBuilder: (context, index) {
+                                      final item = items[index];
+                                      return _buildItemTile(
+                                        item: item,
+                                        list: list,
+                                        index: index,
+                                        onDismissed: list.canEdit && !_shopMode
+                                            ? () {}
+                                            : null,
+                                      );
+                                    },
+                                  ),
               ),
+              if (list.canEdit && !_shopMode && !_selectMode) ...[
+                Builder(
+                  builder: (context) {
+                    final onList = (list.items ?? [])
+                        .map((i) => i.name.toLowerCase())
+                        .toSet();
+                    final chips = _recentNames
+                        .where((n) => !onList.contains(n.toLowerCase()))
+                        .toList();
+                    if (chips.isEmpty) return const SizedBox.shrink();
+                    return SizedBox(
+                    height: 40,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+                      itemCount: chips.length,
+                      separatorBuilder: (_, __) => const SizedBox(width: 8),
+                      itemBuilder: (context, index) {
+                        final name = chips[index];
+                        return ActionChip(
+                          label: Text(name),
+                          onPressed: _quickAddBusy
+                              ? null
+                              : () async {
+                                  setState(() => _quickAddBusy = true);
+                                  try {
+                                    await _addOrMergeItem(name: name);
+                                    await _rememberNames([name]);
+                                    _reload();
+                                  } catch (e) {
+                                    if (!mounted) return;
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text('Could not add: $e'),
+                                        backgroundColor: ShoppaColors.rose,
+                                      ),
+                                    );
+                                  } finally {
+                                    if (mounted) {
+                                      setState(() => _quickAddBusy = false);
+                                    }
+                                  }
+                                },
+                        );
+                      },
+                    ),
+                  );
+                  },
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                  child: TextField(
+                    controller: _quickAddController,
+                    focusNode: _quickAddFocus,
+                    enabled: !_quickAddBusy,
+                    textInputAction: TextInputAction.done,
+                    onSubmitted: (_) => _quickAddSubmit(),
+                    decoration: InputDecoration(
+                      hintText: 'Quick add… e.g. 2x Milk',
+                      prefixIcon:
+                          const Icon(Icons.add_circle_outline, size: 20),
+                      isDense: true,
+                      suffixIcon: _quickAddBusy
+                          ? const Padding(
+                              padding: EdgeInsets.all(12),
+                              child: SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                            )
+                          : IconButton(
+                              tooltip: 'Add',
+                              icon: const Icon(Icons.send, size: 20),
+                              onPressed: _quickAddSubmit,
+                            ),
+                    ),
+                  ),
+                ),
+              ],
             ],
+          ),
           );
         },
       ),
@@ -1130,16 +4305,18 @@ class _ListScreenState extends State<ListScreen> {
         future: _list,
         builder: (context, snapshot) {
           final list = snapshot.data;
-          if (list == null || !list.canEdit || _shopMode) {
+          if (list == null || !list.canEdit || _shopMode || _selectMode) {
             return const SizedBox.shrink();
           }
           return FloatingActionButton(
-            onPressed: _addItem,
+            onPressed: _showAddMenu,
             backgroundColor: ShoppaColors.amber,
+            tooltip: 'Add items',
             child: const Icon(Icons.add, color: Colors.white),
           );
         },
       ),
+      bottomNavigationBar: _buildSelectBar(),
     );
   }
 }
@@ -1205,21 +4382,38 @@ class _ShareSheetState extends State<_ShareSheet> {
     final email = _emailController.text.trim();
     if (email.isEmpty) return;
     try {
-      await widget.listsRepository.shareList(
+      final result = await widget.listsRepository.shareList(
         widget.listId,
         email: email,
         permission: _permission,
       );
       _emailController.clear();
       _reload();
+      if (mounted && result.isPending) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Invite sent to ${result.userEmail}. They’ll join when they sign up.',
+            ),
+            backgroundColor: ShoppaColors.panel2,
+          ),
+        );
+      }
     } on ApiException catch (e) {
       setState(() => _error = e.message);
     }
   }
 
-  Future<void> _remove(String userId) async {
+  Future<void> _remove(ShoppaCollaborator c) async {
     try {
-      await widget.listsRepository.removeCollaborator(widget.listId, userId);
+      if (c.isPending) {
+        await widget.listsRepository.cancelInvite(widget.listId, c.id);
+      } else if (c.userId != null) {
+        await widget.listsRepository.removeCollaborator(
+          widget.listId,
+          c.userId!,
+        );
+      }
       _reload();
     } on ApiException catch (e) {
       setState(() => _error = e.message);
@@ -1227,11 +4421,11 @@ class _ShareSheetState extends State<_ShareSheet> {
   }
 
   Future<void> _setPermission(ShoppaCollaborator c, String permission) async {
-    if (c.permission == permission) return;
+    if (c.permission == permission || c.isPending || c.userId == null) return;
     try {
       await widget.listsRepository.updateCollaboratorPermission(
         widget.listId,
-        c.userId,
+        c.userId!,
         permission: permission,
       );
       _reload();
@@ -1241,8 +4435,9 @@ class _ShareSheetState extends State<_ShareSheet> {
   }
 
   Future<void> _leave(ShoppaCollaborator me) async {
+    if (me.userId == null) return;
     try {
-      await widget.listsRepository.leaveList(widget.listId, me.userId);
+      await widget.listsRepository.leaveList(widget.listId, me.userId!);
       if (mounted) Navigator.of(context).pop(true);
     } on ApiException catch (e) {
       setState(() => _error = e.message);
@@ -1290,18 +4485,27 @@ class _ShareSheetState extends State<_ShareSheet> {
               }
               return Column(
                 children: collaborators.map((c) {
-                  final isMe = myEmail != null &&
+                  final isMe = !c.isPending &&
+                      myEmail != null &&
                       c.userEmail.toLowerCase() == myEmail;
                   return ListTile(
                     contentPadding: EdgeInsets.zero,
                     title: Text(c.userEmail),
-                    subtitle: widget.canManage
-                        ? null
-                        : Text(c.permission),
+                    subtitle: Text(
+                      c.isPending
+                          ? 'Pending · ${c.permission} (waiting for signup)'
+                          : c.permission,
+                      style: TextStyle(
+                        color: c.isPending
+                            ? ShoppaColors.amber
+                            : ShoppaColors.mist,
+                        fontSize: 12,
+                      ),
+                    ),
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        if (widget.canManage)
+                        if (widget.canManage && !c.isPending)
                           DropdownButton<String>(
                             value: c.permission,
                             underline: const SizedBox.shrink(),
@@ -1321,12 +4525,12 @@ class _ShareSheetState extends State<_ShareSheet> {
                           ),
                         if (widget.canManage)
                           IconButton(
-                            tooltip: 'Remove',
+                            tooltip: c.isPending ? 'Cancel invite' : 'Remove',
                             icon: const Icon(
                               Icons.close,
                               color: ShoppaColors.rose,
                             ),
-                            onPressed: () => _remove(c.userId),
+                            onPressed: () => _remove(c),
                           )
                         else if (isMe)
                           TextButton(
@@ -1349,6 +4553,7 @@ class _ShareSheetState extends State<_ShareSheet> {
                     controller: _emailController,
                     decoration: const InputDecoration(
                       hintText: 'friend@example.com',
+                      helperText: 'Works even if they don’t have Shoppa yet',
                     ),
                   ),
                 ),
@@ -1373,7 +4578,7 @@ class _ShareSheetState extends State<_ShareSheet> {
               width: double.infinity,
               child: ElevatedButton(
                 onPressed: _invite,
-                child: const Text('Share'),
+                child: const Text('Share / invite'),
               ),
             ),
           ] else if (_error != null) ...[
@@ -1416,6 +4621,11 @@ class _ActivitySheetState extends State<_ActivitySheet> {
     'item_removed': 'removed an item',
     'collaborator_joined': 'shared this list',
     'collaborator_removed': 'removed a collaborator',
+    'list_scaled': 'scaled this list',
+    'list_created': 'created this list',
+    'list_updated': 'updated this list',
+    'list_published': 'published this list',
+    'list_unpublished': 'unpublished this list',
   };
 
   String _formatTime(String iso) {
@@ -1824,6 +5034,113 @@ class _ComparisonSheet extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+/// Pinned aisle label while scrolling shop mode (stays under the app bar).
+class _AisleStickyHeaderDelegate extends SliverPersistentHeaderDelegate {
+  _AisleStickyHeaderDelegate({
+    required this.label,
+    required this.countLabel,
+    required this.collapsed,
+    this.onToggle,
+    this.onCheckOffAisle,
+  });
+
+  final String label;
+  final String countLabel;
+  final bool collapsed;
+  final VoidCallback? onToggle;
+  /// Bulk check-off for remaining items in this aisle.
+  final VoidCallback? onCheckOffAisle;
+
+  @override
+  double get minExtent => 40;
+
+  @override
+  double get maxExtent => 40;
+
+  @override
+  Widget build(
+    BuildContext context,
+    double shrinkOffset,
+    bool overlapsContent,
+  ) {
+    return Material(
+      elevation: overlapsContent ? 1.5 : 0,
+      color: ShoppaColors.panel,
+      child: InkWell(
+        onTap: onToggle,
+        onLongPress: onCheckOffAisle,
+        child: Container(
+          width: double.infinity,
+          alignment: Alignment.centerLeft,
+          padding: const EdgeInsets.only(left: 12, right: 4),
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: BorderSide(
+                color: overlapsContent
+                    ? ShoppaColors.line
+                    : Colors.transparent,
+              ),
+            ),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                collapsed ? Icons.chevron_right : Icons.expand_more,
+                size: 18,
+                color: ShoppaColors.mist,
+              ),
+              const SizedBox(width: 2),
+              Expanded(
+                child: Text(
+                  label.toUpperCase(),
+                  style: const TextStyle(
+                    color: ShoppaColors.amber,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.6,
+                  ),
+                ),
+              ),
+              Text(
+                countLabel,
+                style: TextStyle(
+                  color: ShoppaColors.mist.withOpacity(0.9),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              if (onCheckOffAisle != null)
+                IconButton(
+                  tooltip: 'Check off aisle',
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(
+                    minWidth: 36,
+                    minHeight: 36,
+                  ),
+                  icon: const Icon(
+                    Icons.done_all,
+                    size: 18,
+                    color: ShoppaColors.green,
+                  ),
+                  onPressed: onCheckOffAisle,
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  bool shouldRebuild(covariant _AisleStickyHeaderDelegate oldDelegate) {
+    return oldDelegate.label != label ||
+        oldDelegate.countLabel != countLabel ||
+        oldDelegate.collapsed != collapsed ||
+        oldDelegate.onToggle != onToggle ||
+        oldDelegate.onCheckOffAisle != onCheckOffAisle;
   }
 }
 

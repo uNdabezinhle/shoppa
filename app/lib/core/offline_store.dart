@@ -59,6 +59,8 @@ abstract class OfflineStore {
   Future<List<Map<String, dynamic>>?> getCachedListsIndex();
   Future<void> enqueue(QueuedMutation mutation);
   Future<List<QueuedMutation>> pendingFor(String listId);
+  /// All queued mutations across every list (for background sync).
+  Future<List<QueuedMutation>> pendingAll();
   Future<void> remove(String mutationId);
 }
 
@@ -101,6 +103,11 @@ class InMemoryOfflineStore implements OfflineStore {
   @override
   Future<List<QueuedMutation>> pendingFor(String listId) async {
     return _pending.where((m) => m.listId == listId).toList();
+  }
+
+  @override
+  Future<List<QueuedMutation>> pendingAll() async {
+    return List<QueuedMutation>.from(_pending);
   }
 
   @override
@@ -162,6 +169,12 @@ class SharedPreferencesOfflineStore implements OfflineStore {
     final prefs = await _prefs;
     final all = await _readAll(prefs);
     return all.where((m) => m.listId == listId).toList();
+  }
+
+  @override
+  Future<List<QueuedMutation>> pendingAll() async {
+    final prefs = await _prefs;
+    return _readAll(prefs);
   }
 
   @override

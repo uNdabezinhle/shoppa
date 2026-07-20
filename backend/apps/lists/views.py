@@ -7,8 +7,8 @@ FR-3.1: share a list at view or edit permission. View collaborators can
 read the list and its items but never mutate them; edit collaborators
 can mutate items but not the list's own title/category/deletion, and
 never manage collaborators — only the owner can do that.
-FR-3.3: every item mutation and collaborator add/remove is recorded to
-a per-list activity feed.
+FR-3.3: item mutations, collaborator add/remove, list create/rename/
+publish, and scale are recorded to a per-list activity feed.
 """
 import csv
 import io
@@ -16,7 +16,7 @@ from decimal import Decimal, InvalidOperation
 
 from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404
-from django.db.models import Q
+from django.db.models import Count, Q
 from rest_framework import generics, permissions
 from rest_framework.pagination import CursorPagination
 from rest_framework.response import Response
@@ -26,11 +26,13 @@ from apps.price_intelligence.models import PriceSource, Product, Store
 from apps.price_intelligence.services import compare_stores_for_list, record_observation
 from apps.users.models import AccountType
 
+from .invite_services import create_or_update_invite
 from .models import (
     CollaboratorPermission,
     ListActivity,
     ListActivityAction,
     ListCollaborator,
+    ListInvite,
     ListItem,
     ShoppingList,
 )
@@ -38,10 +40,23 @@ from .realtime import broadcast_list_event
 from .serializers import (
     ListActivitySerializer,
     ListCollaboratorSerializer,
+    ListInviteSerializer,
     ListItemSerializer,
     ShoppingListDetailSerializer,
     ShoppingListSerializer,
 )
+
+
+def _with_item_counts(queryset):
+    """Annotate item_count / checked_count for list index responses."""
+    return queryset.annotate(
+        annotated_item_count=Count("items", distinct=True),
+        annotated_checked_count=Count(
+            "items",
+            filter=Q(items__checked=True),
+            distinct=True,
+        ),
+    )
 
 
 def _accessible_lists(user):
@@ -68,7 +83,7 @@ class ListListView(generics.ListCreateAPIView):
     pagination_class = ListCursorPagination
 
     def get_queryset(self):
-        return (
+        return _with_item_counts(
             _accessible_lists(self.request.user)
             .select_related("owner")
             .prefetch_related("collaborators__user")
@@ -81,7 +96,13 @@ class ListListView(generics.ListCreateAPIView):
         return super().create(request, *args, **kwargs)
 
     def perform_create(self, serializer):
-        serializer.save(owner=self.request.user)
+        list_obj = serializer.save(owner=self.request.user)
+        ListActivity.objects.create(
+            list=list_obj,
+            actor=self.request.user,
+            action=ListActivityAction.LIST_CREATED,
+            detail=list_obj.title,
+        )
 
 
 class PublicListsView(generics.ListAPIView):
@@ -95,22 +116,25 @@ class PublicListsView(generics.ListAPIView):
     pagination_class = ListCursorPagination
 
     def get_queryset(self):
-        return ShoppingList.objects.filter(is_public=True).exclude(
-            owner=self.request.user
+        return _with_item_counts(
+            ShoppingList.objects.filter(is_public=True).exclude(
+                owner=self.request.user
+            )
         )
 
 
 class ListDetailPermission(permissions.BasePermission):
-    """SAFE methods are open to any role (owner/view/edit); mutating the
-    list itself (title/category/recurrence) or deleting it is owner-only.
+    """SAFE methods: owner/view/edit, or any authenticated user when the
+    list is public (FR-8.2 discover preview). Mutating the list itself
+    (title/category/recurrence) or deleting it is owner-only.
     """
 
     def has_object_permission(self, request, view, obj):
         role = obj.role_for(request.user)
-        if role is None:
-            return False
         if request.method in permissions.SAFE_METHODS:
-            return True
+            if role is not None:
+                return True
+            return bool(obj.is_public)
         return role == "owner"
 
 
@@ -119,7 +143,68 @@ class ListDetailView(generics.RetrieveUpdateDestroyAPIView):
     permission_classes = [permissions.IsAuthenticated, ListDetailPermission]
 
     def get_queryset(self):
-        return _accessible_lists(self.request.user)
+        # Include public lists so Discover can load a read-only preview
+        # (items) before cloning — role_for is still None for strangers.
+        return ShoppingList.objects.filter(
+            Q(owner=self.request.user)
+            | Q(collaborators__user=self.request.user)
+            | Q(is_public=True)
+        ).distinct()
+
+    def perform_update(self, serializer):
+        instance = serializer.instance
+        before = {
+            "title": instance.title,
+            "category": instance.category,
+            "is_recurring": instance.is_recurring,
+            "is_public": instance.is_public,
+            "event_name": instance.event_name,
+            "event_date": instance.event_date,
+        }
+        list_obj = serializer.save()
+        actor = self.request.user
+
+        if before["is_public"] != list_obj.is_public:
+            ListActivity.objects.create(
+                list=list_obj,
+                actor=actor,
+                action=(
+                    ListActivityAction.LIST_PUBLISHED
+                    if list_obj.is_public
+                    else ListActivityAction.LIST_UNPUBLISHED
+                ),
+                detail=list_obj.title,
+            )
+
+        changes = []
+        if before["title"] != list_obj.title:
+            changes.append(f'renamed to "{list_obj.title}"')
+        if before["category"] != list_obj.category:
+            changes.append(f"category → {list_obj.category}")
+        if before["is_recurring"] != list_obj.is_recurring:
+            changes.append(
+                "recurring on" if list_obj.is_recurring else "recurring off"
+            )
+        if before["event_name"] != list_obj.event_name:
+            if list_obj.event_name:
+                changes.append(f'event "{list_obj.event_name}"')
+            else:
+                changes.append("event name cleared")
+        if before["event_date"] != list_obj.event_date:
+            if list_obj.event_date:
+                changes.append(f"event date {list_obj.event_date}")
+            else:
+                changes.append("event date cleared")
+        if changes:
+            detail = "; ".join(changes)
+            if len(detail) > 280:
+                detail = detail[:277] + "..."
+            ListActivity.objects.create(
+                list=list_obj,
+                actor=actor,
+                action=ListActivityAction.LIST_UPDATED,
+                detail=detail,
+            )
 
 
 class ListDuplicateView(APIView):
@@ -149,6 +234,12 @@ class ListDuplicateView(APIView):
             category=source.category,
             is_recurring=source.is_recurring,
             recurrence=source.recurrence,
+        )
+        ListActivity.objects.create(
+            list=clone,
+            actor=request.user,
+            action=ListActivityAction.LIST_CREATED,
+            detail=f"{clone.title} (cloned)",
         )
         ListItem.objects.bulk_create(
             [
@@ -405,6 +496,96 @@ class ListItemListView(SharedListMixin, generics.ListCreateAPIView):
         )
 
 
+class ListItemBulkCreateView(SharedListMixin, APIView):
+    """POST /v1/lists/{id}/items/bulk — add many items in one request.
+
+    Used by paste/import/quick multi-add so the client does not open a
+    new HTTP round-trip per line. Partial success is allowed: valid rows
+    are created and invalid rows are reported under `errors`.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+    MAX_ITEMS = 100
+
+    def post(self, request, list_id):
+        list_obj = self.get_list()
+        self.check_write_access()
+        raw_items = request.data.get("items")
+        if not isinstance(raw_items, list) or len(raw_items) == 0:
+            return Response(
+                {"detail": "Provide a non-empty 'items' array."},
+                status=400,
+            )
+        if len(raw_items) > self.MAX_ITEMS:
+            return Response(
+                {
+                    "detail": (
+                        f"At most {self.MAX_ITEMS} items per bulk request."
+                    )
+                },
+                status=400,
+            )
+
+        max_pos = (
+            ListItem.objects.filter(list=list_obj)
+            .order_by("-position")
+            .values_list("position", flat=True)
+            .first()
+        )
+        next_pos = (max_pos if max_pos is not None else -1) + 1
+
+        created = []
+        errors = []
+        for index, entry in enumerate(raw_items):
+            if not isinstance(entry, dict):
+                errors.append({"index": index, "detail": "Item must be an object."})
+                continue
+            data = dict(entry)
+            name = str(data.get("name", "")).strip()
+            if not name:
+                errors.append({"index": index, "detail": "Name is required."})
+                continue
+            data["name"] = name
+            data.setdefault("position", next_pos)
+            serializer = ListItemSerializer(
+                data=data, context={"request": request}
+            )
+            if not serializer.is_valid():
+                errors.append({"index": index, "errors": serializer.errors})
+                continue
+            item = serializer.save(list=list_obj)
+            next_pos = max(next_pos, int(item.position)) + 1
+            created.append(item)
+            ListActivity.objects.create(
+                list=list_obj,
+                actor=request.user,
+                action=ListActivityAction.ITEM_ADDED,
+                detail=item.name,
+            )
+            broadcast_list_event(
+                list_obj.id,
+                "item.added",
+                ListItemSerializer(item, context={"request": request}).data,
+            )
+
+        if not created:
+            return Response(
+                {"detail": "No items created.", "errors": errors},
+                status=400,
+            )
+
+        return Response(
+            {
+                "items": ListItemSerializer(
+                    created, many=True, context={"request": request}
+                ).data,
+                "created_count": len(created),
+                "errors": errors,
+            },
+            status=201,
+        )
+
+
 class ListItemDetailView(SharedListMixin, generics.RetrieveUpdateDestroyAPIView):
     serializer_class = ListItemSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -486,24 +667,60 @@ class CollaboratorListView(SharedListMixin, generics.ListCreateAPIView):
     """GET is open to the owner and any existing collaborator (so anyone
     on the list can see who else is on it). POST (inviting someone new)
     is owner-only regardless of the caller's role.
+
+    Unknown emails create a pending ListInvite (status=pending) instead
+    of failing; the invite converts to a collaborator on registration.
     """
 
     serializer_class = ListCollaboratorSerializer
     permission_classes = [permissions.IsAuthenticated]
+    pagination_class = None
 
     def get_queryset(self):
-        return ListCollaborator.objects.filter(list=self.get_list())
+        return ListCollaborator.objects.filter(list=self.get_list()).select_related(
+            "user"
+        )
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
         context["list"] = self.get_list()
         return context
 
-    def perform_create(self, serializer):
+    def list(self, request, *args, **kwargs):
+        list_obj = self.get_list()
+        active = ListCollaboratorSerializer(
+            self.get_queryset(), many=True, context=self.get_serializer_context()
+        ).data
+        pending = ListInviteSerializer(
+            ListInvite.objects.filter(list=list_obj), many=True
+        ).data
+        return Response({"results": list(active) + list(pending)})
+
+    def create(self, request, *args, **kwargs):
         list_obj = self.get_list()
         if self.list_role != "owner":
             self.permission_denied(
                 self.request, message="Only the list owner can add collaborators."
+            )
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        if serializer.validated_data.get("_pending"):
+            invite, created = create_or_update_invite(
+                list_obj=list_obj,
+                email=serializer.validated_data["email"],
+                permission=serializer.validated_data.get(
+                    "permission", CollaboratorPermission.VIEW
+                ),
+                invited_by=request.user,
+            )
+            broadcast_list_event(
+                list_obj.id,
+                "collaborator.joined",
+                ListInviteSerializer(invite).data,
+            )
+            return Response(
+                ListInviteSerializer(invite).data,
+                status=201 if created else 200,
             )
         collaborator = serializer.save()
         ListActivity.objects.create(
@@ -512,11 +729,35 @@ class CollaboratorListView(SharedListMixin, generics.ListCreateAPIView):
             action=ListActivityAction.COLLABORATOR_JOINED,
             detail=f"{collaborator.user.email} added as {collaborator.permission}",
         )
+        payload = ListCollaboratorSerializer(collaborator).data
+        broadcast_list_event(list_obj.id, "collaborator.joined", payload)
+        return Response(payload, status=201)
+
+
+class ListInviteDetailView(APIView):
+    """DELETE a pending invite (owner-only)."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def delete(self, request, list_id, invite_id):
+        list_obj = get_object_or_404(ShoppingList, pk=list_id)
+        if list_obj.role_for(request.user) != "owner":
+            raise Http404
+        invite = get_object_or_404(ListInvite, pk=invite_id, list=list_obj)
+        email = invite.email
+        invite.delete()
+        ListActivity.objects.create(
+            list=list_obj,
+            actor=request.user,
+            action=ListActivityAction.COLLABORATOR_REMOVED,
+            detail=f"invite cancelled for {email}",
+        )
         broadcast_list_event(
             list_obj.id,
-            "collaborator.joined",
-            ListCollaboratorSerializer(collaborator).data,
+            "collaborator.removed",
+            {"invite_id": str(invite_id), "user_email": email, "status": "pending"},
         )
+        return Response(status=204)
 
 
 class CollaboratorDetailView(APIView):

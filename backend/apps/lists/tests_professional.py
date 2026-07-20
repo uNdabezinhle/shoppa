@@ -198,6 +198,8 @@ class ListPublishTests(APITestCase):
         self.public_url = reverse("lists-public")
 
     def test_professional_can_publish_a_list(self):
+        from .models import ListActivity, ListActivityAction
+
         self.client.force_authenticate(self.pro_user)
         response = self.client.patch(
             self.detail_url, {"is_public": True}, format="json"
@@ -205,6 +207,26 @@ class ListPublishTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.list.refresh_from_db()
         self.assertTrue(self.list.is_public)
+        entry = ListActivity.objects.get(
+            list=self.list, action=ListActivityAction.LIST_PUBLISHED
+        )
+        self.assertEqual(entry.actor_id, self.pro_user.id)
+
+    def test_unpublish_logs_list_unpublished_activity(self):
+        from .models import ListActivity, ListActivityAction
+
+        self.list.is_public = True
+        self.list.save(update_fields=["is_public"])
+        self.client.force_authenticate(self.pro_user)
+        response = self.client.patch(
+            self.detail_url, {"is_public": False}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(
+            ListActivity.objects.filter(
+                list=self.list, action=ListActivityAction.LIST_UNPUBLISHED
+            ).exists()
+        )
 
     def test_personal_account_cannot_publish(self):
         personal_user = User.objects.create_user(
@@ -253,6 +275,32 @@ class ListPublishTests(APITestCase):
         clone = ShoppingList.objects.get(id=response.data["id"])
         self.assertEqual(clone.owner, self.other_user)
         self.assertEqual(clone.items.get(name="Rice").quantity, 10)
+
+    def test_other_user_can_preview_a_published_list_detail(self):
+        self.list.is_public = True
+        self.list.save()
+        self.client.force_authenticate(self.other_user)
+        response = self.client.get(self.detail_url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["title"], self.list.title)
+        names = {item["name"] for item in response.data["items"]}
+        self.assertIn("Rice", names)
+        # Strangers get no collaborator role on a public preview.
+        self.assertIsNone(response.data.get("role"))
+
+    def test_other_user_cannot_mutate_a_published_list(self):
+        self.list.is_public = True
+        self.list.save()
+        self.client.force_authenticate(self.other_user)
+        response = self.client.patch(
+            self.detail_url, {"title": "Hijacked"}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_other_user_cannot_preview_an_unpublished_list(self):
+        self.client.force_authenticate(self.other_user)
+        response = self.client.get(self.detail_url)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_other_user_cannot_clone_an_unpublished_list(self):
         self.client.force_authenticate(self.other_user)

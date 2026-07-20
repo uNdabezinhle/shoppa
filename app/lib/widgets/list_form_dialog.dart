@@ -14,9 +14,16 @@ Future<Map<String, dynamic>?> showListFormDialog(
   String? initialTitle,
   String initialCategory = 'custom',
   bool initialRecurring = false,
+  String? initialEventName,
+  String? initialEventDate,
+  bool showEventFields = false,
   String title = 'New list',
 }) async {
   final titleController = TextEditingController(text: initialTitle ?? '');
+  final eventNameController =
+      TextEditingController(text: initialEventName ?? '');
+  final eventDateController =
+      TextEditingController(text: initialEventDate ?? '');
   var category = initialCategory;
   var recurring = initialRecurring;
 
@@ -52,20 +59,47 @@ Future<Map<String, dynamic>?> showListFormDialog(
                 value: recurring,
                 onChanged: (v) => setLocal(() => recurring = v),
               ),
+              if (showEventFields) ...[
+                const SizedBox(height: 4),
+                TextField(
+                  controller: eventNameController,
+                  decoration: const InputDecoration(
+                    labelText: 'Event name (Pro)',
+                    hintText: 'e.g. Weekend braai',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: eventDateController,
+                  decoration: const InputDecoration(
+                    labelText: 'Event date (Pro)',
+                    hintText: 'YYYY-MM-DD',
+                  ),
+                ),
+              ],
             ],
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             onPressed: () {
               final name = titleController.text.trim();
               if (name.isEmpty) return;
-              Navigator.pop(ctx, {
+              final result = <String, dynamic>{
                 'title': name,
                 'category': category,
                 'is_recurring': recurring,
-              });
+              };
+              if (showEventFields) {
+                result['event_name'] = eventNameController.text.trim();
+                final date = eventDateController.text.trim();
+                if (date.isNotEmpty) result['event_date'] = date;
+              }
+              Navigator.pop(ctx, result);
             },
             child: const Text('Save'),
           ),

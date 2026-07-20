@@ -208,5 +208,82 @@ void main() {
       expect(synced, 0);
       expect(await offlineStore.pendingFor('l-1'), isEmpty);
     });
+
+    test('syncAllPending flushes queues for every list', () async {
+      final requestedPaths = <String>[];
+      final mockClient = MockClient((request) async {
+        requestedPaths.add(request.url.path);
+        return http.Response(jsonEncode({'id': 'ok'}), 200);
+      });
+      await offlineStore.enqueue(QueuedMutation(
+        id: 'q-1',
+        listId: 'l-1',
+        itemId: 'i-1',
+        type: 'check_item',
+        payload: {'checked': true},
+        clientUpdatedAt: DateTime.now().toUtc().toIso8601String(),
+      ));
+      await offlineStore.enqueue(QueuedMutation(
+        id: 'q-2',
+        listId: 'l-2',
+        itemId: 'i-2',
+        type: 'check_item',
+        payload: {'checked': true},
+        clientUpdatedAt: DateTime.now().toUtc().toIso8601String(),
+      ));
+
+      final repo = repoWith(mockClient);
+      final synced = await repo.syncAllPending();
+
+      expect(synced, 2);
+      expect(requestedPaths, contains('/v1/lists/l-1/items/i-1'));
+      expect(requestedPaths, contains('/v1/lists/l-2/items/i-2'));
+      expect(await offlineStore.pendingAll(), isEmpty);
+    });
+
+    test('fetchLists online flushes pending mutations without opening detail',
+        () async {
+      final requestedPaths = <String>[];
+      final mockClient = MockClient((request) async {
+        requestedPaths.add(request.url.path);
+        if (request.url.path == '/v1/lists' && request.method == 'GET') {
+          return http.Response(
+            jsonEncode({
+              'results': [
+                {
+                  'id': 'l-1',
+                  'title': 'Groceries',
+                  'category': 'groceries',
+                  'is_recurring': false,
+                  'item_count': 1,
+                },
+              ],
+            }),
+            200,
+          );
+        }
+        return http.Response(jsonEncode({'id': 'i-1', 'checked': true}), 200);
+      });
+      await offlineStore.enqueue(QueuedMutation(
+        id: 'q-1',
+        listId: 'l-1',
+        itemId: 'i-1',
+        type: 'check_item',
+        payload: {'checked': true},
+        clientUpdatedAt: DateTime.now().toUtc().toIso8601String(),
+      ));
+
+      final repo = repoWith(mockClient);
+      final lists = await repo.fetchLists();
+
+      expect(lists, hasLength(1));
+      expect(requestedPaths, contains('/v1/lists/l-1/items/i-1'));
+      expect(await offlineStore.pendingAll(), isEmpty);
+      // Index is fetched again after a successful background sync.
+      expect(
+        requestedPaths.where((p) => p == '/v1/lists').length,
+        greaterThanOrEqualTo(2),
+      );
+    });
   });
 }

@@ -104,9 +104,13 @@ class _ProductPickerSheetState extends State<_ProductPickerSheet> {
                 }
                 final products = snapshot.data ?? [];
                 if (products.isEmpty) {
-                  return const Text(
-                    'No matching products.',
-                    style: TextStyle(color: ShoppaColors.mist),
+                  return const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 24),
+                    child: Text(
+                      'No matching products in your region. '
+                      'Try another search or skip for a free-text item.',
+                      style: TextStyle(color: ShoppaColors.mist),
+                    ),
                   );
                 }
                 return ListView.separated(
@@ -117,16 +121,32 @@ class _ProductPickerSheetState extends State<_ProductPickerSheet> {
                     final product = products[index];
                     return ListTile(
                       contentPadding: EdgeInsets.zero,
+                      leading: CircleAvatar(
+                        backgroundColor: ShoppaColors.panel2,
+                        child: Text(
+                          product.name.isNotEmpty
+                              ? product.name[0].toUpperCase()
+                              : '?',
+                          style: const TextStyle(
+                            color: ShoppaColors.ink,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
                       title: Text(
                         product.name,
                         style: const TextStyle(color: ShoppaColors.ink),
                       ),
                       subtitle: Text(
-                        product.region,
+                        'Catalogue · ${product.region}',
                         style: const TextStyle(
                           color: ShoppaColors.mist,
                           fontSize: 12,
                         ),
+                      ),
+                      trailing: const Icon(
+                        Icons.add_circle_outline,
+                        color: ShoppaColors.green,
                       ),
                       onTap: () => Navigator.pop(context, product),
                     );

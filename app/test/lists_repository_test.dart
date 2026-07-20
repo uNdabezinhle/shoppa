@@ -201,6 +201,7 @@ void main() {
             'user_id': 'u-2',
             'user_email': 'friend@example.com',
             'permission': 'edit',
+            'status': 'active',
           }),
           201,
         );
@@ -223,6 +224,39 @@ void main() {
       expect(sentBody['permission'], 'edit');
       expect(collaborator.userEmail, 'friend@example.com');
       expect(collaborator.permission, 'edit');
+      expect(collaborator.isPending, isFalse);
+    });
+
+    test('shareList parses pending invite for unknown email', () async {
+      final mockClient = MockClient((request) async {
+        return http.Response(
+          jsonEncode({
+            'id': 'inv-1',
+            'user_id': null,
+            'user_email': 'new@example.com',
+            'permission': 'view',
+            'status': 'pending',
+          }),
+          201,
+        );
+      });
+      final repo = ListsRepository(
+        ApiClient(
+          baseUrl: 'http://localhost:8000/v1',
+          tokenStore: tokenStore,
+          httpClient: mockClient,
+        ),
+      );
+
+      final invite = await repo.shareList(
+        'l-1',
+        email: 'new@example.com',
+        permission: 'view',
+      );
+
+      expect(invite.isPending, isTrue);
+      expect(invite.userId, isNull);
+      expect(invite.userEmail, 'new@example.com');
     });
 
     test('fetchCollaborators parses the paginated results envelope', () async {
@@ -236,6 +270,14 @@ void main() {
                 'user_id': 'u-2',
                 'user_email': 'friend@example.com',
                 'permission': 'view',
+                'status': 'active',
+              },
+              {
+                'id': 'inv-1',
+                'user_id': null,
+                'user_email': 'pending@example.com',
+                'permission': 'edit',
+                'status': 'pending',
               },
             ],
             'next': null,
@@ -254,8 +296,9 @@ void main() {
 
       final collaborators = await repo.fetchCollaborators('l-1');
 
-      expect(collaborators, hasLength(1));
+      expect(collaborators, hasLength(2));
       expect(collaborators.first.userEmail, 'friend@example.com');
+      expect(collaborators.last.isPending, isTrue);
     });
 
     test('removeCollaborator DELETEs the collaborator by user id', () async {
@@ -273,6 +316,23 @@ void main() {
       );
 
       await repo.removeCollaborator('l-1', 'u-2');
+    });
+
+    test('cancelInvite DELETEs pending invite by id', () async {
+      final mockClient = MockClient((request) async {
+        expect(request.method, 'DELETE');
+        expect(request.url.path, '/v1/lists/l-1/invites/inv-9');
+        return http.Response('', 204);
+      });
+      final repo = ListsRepository(
+        ApiClient(
+          baseUrl: 'http://localhost:8000/v1',
+          tokenStore: tokenStore,
+          httpClient: mockClient,
+        ),
+      );
+
+      await repo.cancelInvite('l-1', 'inv-9');
     });
 
     test('fetchActivity parses actor, action, and detail', () async {
@@ -653,6 +713,57 @@ void main() {
 
       expect(sentBody['product_id'], 'p-1');
       expect(item.name, 'Full Cream Milk 2L');
+    });
+
+    test('addItemsBulk posts to /items/bulk', () async {
+      late Map<String, dynamic> sentBody;
+      late String path;
+      final mockClient = MockClient((request) async {
+        path = request.url.path;
+        sentBody = jsonDecode(request.body) as Map<String, dynamic>;
+        return http.Response(
+          jsonEncode({
+            'items': [
+              {
+                'id': 'i-1',
+                'name': 'Milk',
+                'quantity': '2.00',
+                'unit': 'ea',
+                'note': '',
+                'checked': false,
+              },
+              {
+                'id': 'i-2',
+                'name': 'Bread',
+                'quantity': '1.00',
+                'unit': 'ea',
+                'note': '',
+                'checked': false,
+              },
+            ],
+            'created_count': 2,
+            'errors': [],
+          }),
+          201,
+        );
+      });
+      final repo = ListsRepository(
+        ApiClient(
+          baseUrl: 'http://localhost:8000/v1',
+          tokenStore: tokenStore,
+          httpClient: mockClient,
+        ),
+      );
+
+      final result = await repo.addItemsBulk('l-1', const [
+        BulkItemInput(name: 'Milk', quantity: 2),
+        BulkItemInput(name: 'Bread'),
+      ]);
+
+      expect(path, '/v1/lists/l-1/items/bulk');
+      expect((sentBody['items'] as List).length, 2);
+      expect(result.addedCount, 2);
+      expect(result.failedCount, 0);
     });
 
     test('sendMessage POSTs body to /messages', () async {

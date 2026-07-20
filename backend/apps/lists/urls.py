@@ -8,6 +8,8 @@ from .views import (
     ListDetailView,
     ListDuplicateView,
     ListExportView,
+    ListInviteDetailView,
+    ListItemBulkCreateView,
     ListItemDetailView,
     ListItemListView,
     ListListView,
@@ -25,6 +27,11 @@ urlpatterns = [
         name="list-items-list",
     ),
     path(
+        "lists/<uuid:list_id>/items/bulk",
+        ListItemBulkCreateView.as_view(),
+        name="list-items-bulk",
+    ),
+    path(
         "lists/<uuid:list_id>/items/<uuid:item_id>",
         ListItemDetailView.as_view(),
         name="list-items-detail",
@@ -38,6 +45,11 @@ urlpatterns = [
         "lists/<uuid:list_id>/collaborators/<uuid:user_id>",
         CollaboratorDetailView.as_view(),
         name="list-collaborators-detail",
+    ),
+    path(
+        "lists/<uuid:list_id>/invites/<uuid:invite_id>",
+        ListInviteDetailView.as_view(),
+        name="list-invites-detail",
     ),
     path(
         "lists/<uuid:list_id>/activity",

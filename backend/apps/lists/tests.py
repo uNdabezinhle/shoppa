@@ -73,6 +73,19 @@ class ShoppingListTests(APITestCase):
         titles = [item["title"] for item in response.data["results"]]
         self.assertEqual(titles, ["Mine"])
 
+    def test_list_index_includes_checked_count(self):
+        shopping_list = ShoppingList.objects.create(
+            owner=self.user, title="Shop", category=ListCategory.GROCERIES
+        )
+        ListItem.objects.create(list=shopping_list, name="Milk", checked=True)
+        ListItem.objects.create(list=shopping_list, name="Bread", checked=False)
+        ListItem.objects.create(list=shopping_list, name="Eggs", checked=True)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        row = next(r for r in response.data["results"] if r["title"] == "Shop")
+        self.assertEqual(row["item_count"], 3)
+        self.assertEqual(row["checked_count"], 2)
+
     def test_recurring_list_stores_recurrence(self):
         response = self.client.post(
             self.url,
@@ -101,6 +114,37 @@ class ShoppingListTests(APITestCase):
             reverse("lists-detail", kwargs={"pk": other_list.id})
         )
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_create_list_logs_list_created_activity(self):
+        from .models import ListActivity, ListActivityAction
+
+        response = self.client.post(
+            self.url, {"title": "Braai night", "category": "event"}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        entry = ListActivity.objects.get(
+            list_id=response.data["id"], action=ListActivityAction.LIST_CREATED
+        )
+        self.assertEqual(entry.actor_id, self.user.id)
+        self.assertEqual(entry.detail, "Braai night")
+
+    def test_rename_list_logs_list_updated_activity(self):
+        from .models import ListActivity, ListActivityAction
+
+        shopping_list = ShoppingList.objects.create(
+            owner=self.user, title="Old name", category=ListCategory.CUSTOM
+        )
+        response = self.client.patch(
+            reverse("lists-detail", kwargs={"pk": shopping_list.id}),
+            {"title": "New name"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        entry = ListActivity.objects.get(
+            list=shopping_list, action=ListActivityAction.LIST_UPDATED
+        )
+        self.assertIn("New name", entry.detail)
+        self.assertEqual(entry.actor_id, self.user.id)
 
 
 class ListItemTests(APITestCase):
@@ -141,6 +185,40 @@ class ListItemTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data["name"], "Full cream milk 2L")
         self.assertEqual(response.data["note"], "any brand on promo")
+
+    def test_bulk_add_items(self):
+        from .models import ListActivity, ListActivityAction
+
+        url = reverse("list-items-bulk", kwargs={"list_id": self.list.id})
+        response = self.client.post(
+            url,
+            {
+                "items": [
+                    {"name": "Milk", "quantity": 2, "unit": "ea"},
+                    {"name": "Rice", "quantity": "1.5", "unit": "kg"},
+                    {"name": ""},  # invalid — skipped
+                ]
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["created_count"], 2)
+        self.assertEqual(len(response.data["items"]), 2)
+        self.assertEqual(len(response.data["errors"]), 1)
+        self.assertEqual(
+            ListItem.objects.filter(list=self.list).count(), 2
+        )
+        self.assertEqual(
+            ListActivity.objects.filter(
+                list=self.list, action=ListActivityAction.ITEM_ADDED
+            ).count(),
+            2,
+        )
+
+    def test_bulk_add_rejects_empty_payload(self):
+        url = reverse("list-items-bulk", kwargs={"list_id": self.list.id})
+        response = self.client.post(url, {"items": []}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_edit_item_quantity(self):
         """TC-2.2: edit items."""
@@ -190,6 +268,42 @@ class ListItemTests(APITestCase):
         url = reverse("list-items-list", kwargs={"list_id": other_list.id})
         response = self.client.post(url, {"name": "Sneaky item"}, format="json")
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_product_id_must_exist_in_catalogue(self):
+        import uuid
+
+        response = self.client.post(
+            self.items_url,
+            {
+                "name": "Ghost product",
+                "product_id": str(uuid.uuid4()),
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_product_id_must_match_user_region(self):
+        from apps.price_intelligence.models import Product
+
+        foreign = Product.objects.create(name="UK Tea", region="GB")
+        response = self.client.post(
+            self.items_url,
+            {"name": foreign.name, "product_id": str(foreign.id)},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_valid_product_id_is_accepted(self):
+        from apps.price_intelligence.models import Product
+
+        product = Product.objects.create(name="Full Cream Milk 2L", region="ZA")
+        response = self.client.post(
+            self.items_url,
+            {"name": product.name, "product_id": str(product.id)},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["product_id"], str(product.id))
 
 
 class CollaborationTests(APITestCase):
@@ -317,14 +431,97 @@ class CollaborationTests(APITestCase):
         )
         self.assertEqual(dup_response.status_code, status.HTTP_400_BAD_REQUEST)
 
-    def test_share_with_unknown_email_is_rejected(self):
+    def test_share_with_unknown_email_creates_pending_invite(self):
+        from .models import ListInvite
+
         self.client.force_authenticate(self.owner)
         response = self.client.post(
             self.collaborators_url,
             {"email": "nobody@example.com", "permission": "view"},
             format="json",
         )
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["status"], "pending")
+        self.assertEqual(response.data["user_email"], "nobody@example.com")
+        self.assertIsNone(response.data["user_id"])
+        self.assertTrue(
+            ListInvite.objects.filter(
+                list=self.list, email="nobody@example.com"
+            ).exists()
+        )
+
+    def test_pending_invite_appears_in_collaborators_list(self):
+        from .models import ListInvite
+
+        ListInvite.objects.create(
+            list=self.list,
+            email="pending@example.com",
+            permission="edit",
+            invited_by=self.owner,
+        )
+        self.client.force_authenticate(self.owner)
+        response = self.client.get(self.collaborators_url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        emails = {row["user_email"] for row in response.data["results"]}
+        statuses = {
+            row["user_email"]: row["status"] for row in response.data["results"]
+        }
+        self.assertIn("pending@example.com", emails)
+        self.assertEqual(statuses["pending@example.com"], "pending")
+
+    def test_owner_can_cancel_pending_invite(self):
+        from .models import ListInvite
+
+        invite = ListInvite.objects.create(
+            list=self.list,
+            email="pending@example.com",
+            permission="view",
+            invited_by=self.owner,
+        )
+        self.client.force_authenticate(self.owner)
+        url = reverse(
+            "list-invites-detail",
+            kwargs={"list_id": self.list.id, "invite_id": invite.id},
+        )
+        response = self.client.delete(url)
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(ListInvite.objects.filter(pk=invite.id).exists())
+
+    def test_registering_accepts_pending_list_invites(self):
+        from .models import ListCollaborator, ListInvite
+
+        ListInvite.objects.create(
+            list=self.list,
+            email="newbie@example.com",
+            permission="edit",
+            invited_by=self.owner,
+        )
+        register = self.client.post(
+            reverse("auth-register"),
+            {
+                "email": "newbie@example.com",
+                "password": "a-strong-passw0rd!",
+                "account_type": "personal",
+                "region": "ZA",
+            },
+            format="json",
+        )
+        self.assertEqual(register.status_code, status.HTTP_201_CREATED)
+        self.assertFalse(
+            ListInvite.objects.filter(email="newbie@example.com").exists()
+        )
+        self.assertTrue(
+            ListCollaborator.objects.filter(
+                list=self.list, user__email="newbie@example.com", permission="edit"
+            ).exists()
+        )
+        self.client.force_authenticate(
+            User.objects.get(email="newbie@example.com")
+        )
+        self.assertEqual(
+            self.client.get(self.list_detail_url).status_code,
+            status.HTTP_200_OK,
+        )
 
     def test_owner_can_remove_collaborator_and_access_is_revoked(self):
         self._share(permission="edit")

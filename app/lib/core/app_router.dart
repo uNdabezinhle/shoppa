@@ -12,11 +12,13 @@ import '../screens/login_screen.dart';
 import '../screens/mall_tab_screen.dart';
 import '../screens/notifications_screen.dart';
 import '../screens/my_lists_tab_screen.dart';
+import '../screens/multi_list_trip_screen.dart';
 import '../screens/discover_lists_screen.dart';
 import '../screens/profile_screen.dart';
 import '../screens/promotions_screen.dart';
 import '../screens/subscription_screen.dart';
 import '../screens/register_screen.dart';
+import 'multi_list_trip.dart';
 
 GoRouter createAppRouter(AppDeps deps) {
   return GoRouter(
@@ -71,6 +73,7 @@ GoRouter createAppRouter(AppDeps deps) {
             path: '/my-lists',
             builder: (context, state) => MyListsTabScreen(
               listsRepository: deps.listsRepository,
+              accountType: deps.authState.user?.accountType ?? 'personal',
             ),
           ),
           GoRoute(
@@ -132,6 +135,9 @@ GoRouter createAppRouter(AppDeps deps) {
         builder: (context, state) {
           final listId = state.pathParameters['listId']!;
           final title = state.uri.queryParameters['title'] ?? 'List';
+          final shopParam = state.uri.queryParameters['shop'] ?? '';
+          final startInShopMode =
+              shopParam == '1' || shopParam.toLowerCase() == 'true';
           return ListScreen(
             adsRepository: deps.adsRepository,
             listsRepository: deps.listsRepository,
@@ -142,6 +148,17 @@ GoRouter createAppRouter(AppDeps deps) {
             accountType: deps.authState.user?.accountType ?? 'personal',
             listId: listId,
             title: title,
+            startInShopMode: startInShopMode,
+          );
+        },
+      ),
+      GoRoute(
+        path: '/trip',
+        builder: (context, state) {
+          final ids = parseTripListIds(state.uri.queryParameters['lists']);
+          return MultiListTripScreen(
+            listsRepository: deps.listsRepository,
+            listIds: ids,
           );
         },
       ),
