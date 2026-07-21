@@ -124,7 +124,10 @@ class _MallTabScreenState extends State<MallTabScreen> {
   }
 
   Future<void> _refresh() async {
-    setState(() => _data = _load());
+    final future = _load();
+    setState(() {
+      _data = future;
+    });
   }
 
   Future<void> _startTodaysTrip(List<ShoppaList> all) async {

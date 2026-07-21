@@ -1976,7 +1976,9 @@ class _ListScreenState extends State<ListScreen> {
   Future<void> _pullToRefresh() async {
     final future = _loadAndSync();
     if (!mounted) return;
-    setState(() => _list = future);
+    setState(() {
+      _list = future;
+    });
     try {
       await future;
       await _refreshPendingCount();
@@ -4941,8 +4943,12 @@ class _ActivitySheetState extends State<_ActivitySheet> {
     _entries = widget.listsRepository.fetchActivity(widget.listId);
   }
 
-  void _reload() =>
-      setState(() => _entries = widget.listsRepository.fetchActivity(widget.listId));
+  void _reload() {
+    final future = widget.listsRepository.fetchActivity(widget.listId);
+    setState(() {
+      _entries = future;
+    });
+  }
 
   static const _labels = {
     'item_added': 'added an item',
@@ -5092,8 +5098,12 @@ class _ChatSheetState extends State<_ChatSheet> {
     super.dispose();
   }
 
-  void _reload() =>
-      setState(() => _messages = widget.listsRepository.fetchMessages(widget.listId));
+  void _reload() {
+    final future = widget.listsRepository.fetchMessages(widget.listId);
+    setState(() {
+      _messages = future;
+    });
+  }
 
   Future<void> _send() async {
     final body = _controller.text.trim();

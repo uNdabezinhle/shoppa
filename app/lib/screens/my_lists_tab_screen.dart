@@ -66,8 +66,12 @@ class _MyListsTabScreenState extends State<MyListsTabScreen> {
     super.dispose();
   }
 
-  void _reload() =>
-      setState(() => _lists = _fetchListsWithSpendContext());
+  void _reload() {
+    final future = _fetchListsWithSpendContext();
+    setState(() {
+      _lists = future;
+    });
+  }
 
   Future<List<ShoppaList>> _fetchListsWithSpendContext() async {
     final lists = await widget.listsRepository.fetchLists();

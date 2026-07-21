@@ -88,13 +88,20 @@ class _ReceiptHistorySheetState extends State<_ReceiptHistorySheet> {
     if (ok != true) return;
     await widget.store.clearScope(scope);
     if (!mounted) return;
-    setState(() => _future = _load());
+    _reloadFuture();
+  }
+
+  void _reloadFuture() {
+    final future = _load();
+    setState(() {
+      _future = future;
+    });
   }
 
   Future<void> _removeReceipt(LoggedReceipt receipt) async {
     await widget.store.removeById(receipt.id);
     if (!mounted) return;
-    setState(() => _future = _load());
+    _reloadFuture();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('Removed ${receipt.formattedTotal}'),
@@ -105,7 +112,7 @@ class _ReceiptHistorySheetState extends State<_ReceiptHistorySheet> {
           onPressed: () async {
             await widget.store.add(receipt);
             if (!mounted) return;
-            setState(() => _future = _load());
+            _reloadFuture();
           },
         ),
       ),

@@ -46,7 +46,7 @@ String _deriveWsBaseUrl(String apiBaseUrl) {
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
 
-  final tokenStore = SecureTokenStore();
+  final tokenStore = createDefaultTokenStore();
   final apiClient = ApiClient(baseUrl: _apiBaseUrl, tokenStore: tokenStore);
   final adminRepository = AdminRepository(apiClient);
   final adsRepository = AdsRepository(apiClient);

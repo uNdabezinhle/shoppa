@@ -78,13 +78,16 @@ class AuthRepository {
   /// Restores a session from persisted tokens. Returns null when no refresh
   /// token is stored or the session is no longer valid (expired/revoked).
   Future<ShoppaUser?> restoreSession() async {
-    if (!await _client.tokenStore.hasSession) return null;
     try {
+      if (!await _client.tokenStore.hasSession) return null;
       return await fetchMe();
     } on ApiException catch (e) {
       if (e.statusCode == 401) await _client.tokenStore.clear();
       return null;
     } catch (_) {
+      try {
+        await _client.tokenStore.clear();
+      } catch (_) {}
       return null;
     }
   }
