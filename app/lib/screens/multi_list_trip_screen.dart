@@ -2066,7 +2066,7 @@ class _MultiListTripScreenState extends State<MultiListTripScreen> {
 
     return PopScope(
       canPop: _leaveConfirmed || _remaining == 0,
-      onPopInvokedWithResult: (didPop, _) async {
+      onPopInvoked: (didPop) async {
         if (didPop) return;
         if (_busy) return;
         await _onSystemBack();
