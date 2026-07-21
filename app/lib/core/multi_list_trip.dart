@@ -251,6 +251,87 @@ Set<String> expandOpenAisleIds({
   return collapsedIds.where((id) => !open.contains(id)).toSet();
 }
 
+/// One item that failed during a multi-list batch check-off / undo.
+class TripBatchFailure {
+  const TripBatchFailure({
+    required this.lineKey,
+    required this.listId,
+    required this.listTitle,
+    required this.itemName,
+    required this.message,
+  });
+
+  final String lineKey;
+  final String listId;
+  final String listTitle;
+  final String itemName;
+  final String message;
+}
+
+/// Outcome of applying check-off (or undo) across several trip lines.
+class TripBatchOutcome {
+  const TripBatchOutcome({
+    required this.succeededKeys,
+    required this.failures,
+  });
+
+  final List<String> succeededKeys;
+  final List<TripBatchFailure> failures;
+
+  bool get hasFailures => failures.isNotEmpty;
+  bool get allFailed =>
+      succeededKeys.isEmpty && failures.isNotEmpty;
+  bool get allSucceeded => failures.isEmpty && succeededKeys.isNotEmpty;
+  int get attempted => succeededKeys.length + failures.length;
+}
+
+/// Snack / dialog headline for a batch outcome.
+String formatTripBatchOutcome(TripBatchOutcome outcome) {
+  final ok = outcome.succeededKeys.length;
+  final bad = outcome.failures.length;
+  if (outcome.allSucceeded) {
+    if (ok == 1) return 'Updated 1 item';
+    return 'Updated $ok items';
+  }
+  if (outcome.allFailed) {
+    if (bad == 1) return 'Could not update 1 item';
+    return 'Could not update $bad items';
+  }
+  return 'Updated $ok · $bad failed';
+}
+
+/// Per-list failure lines for a dialog body (newest failures first-seen).
+List<String> formatTripBatchFailureLines(
+  TripBatchOutcome outcome, {
+  int limit = 6,
+}) {
+  if (outcome.failures.isEmpty) return const [];
+  final byList = <String, List<String>>{};
+  for (final f in outcome.failures) {
+    byList.putIfAbsent(f.listTitle, () => []).add(f.itemName);
+  }
+  final lines = <String>[];
+  for (final e in byList.entries) {
+    final names = e.value;
+    final shown = names.take(3).join(', ');
+    final extra = names.length > 3 ? ' +${names.length - 3}' : '';
+    lines.add('${e.key}: $shown$extra');
+    if (lines.length >= limit) break;
+  }
+  return lines;
+}
+
+/// Apply [item] onto [lines] when keys match; returns a new list.
+List<TripLine> replaceTripLineItem(
+  List<TripLine> lines,
+  String lineKey,
+  ShoppaListItem item,
+) {
+  return lines
+      .map((l) => l.key == lineKey ? l.copyWithItem(item) : l)
+      .toList(growable: false);
+}
+
 List<TripAisleSection> tripAisleSections(
   List<TripLine> lines, {
   bool separateChecked = true,

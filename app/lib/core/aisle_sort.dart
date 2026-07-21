@@ -439,6 +439,38 @@ String formatLeftBehindCount(int count) {
   return '$count left behind';
 }
 
+/// How many item names in [names] have a device-local aisle override.
+int countAisleOverridesForNames(
+  Iterable<String> names,
+  Map<String, String> aisleOverrides,
+) {
+  if (aisleOverrides.isEmpty) return 0;
+  var n = 0;
+  final seen = <String>{};
+  for (final raw in names) {
+    final key = aisleMatchKey(raw);
+    if (key.isEmpty || !seen.add(key)) continue;
+    if (aisleOverrides.containsKey(key)) n++;
+  }
+  return n;
+}
+
+/// Header chip, e.g. `2 moved` when overrides sit in this aisle section.
+String? formatAisleOverrideCountLabel(int overrideCount) {
+  if (overrideCount <= 0) return null;
+  if (overrideCount == 1) return '1 moved';
+  return '$overrideCount moved';
+}
+
+/// Whether [itemName] currently uses a manual aisle override.
+bool itemHasAisleOverride(
+  String itemName,
+  Map<String, String> aisleOverrides,
+) {
+  if (aisleOverrides.isEmpty) return false;
+  return aisleOverrides.containsKey(aisleMatchKey(itemName));
+}
+
 /// Aisle groups in walk order for [layout], with any missing ids appended.
 List<AisleGroup> aisleGroupsForLayout(StoreAisleLayout layout) {
   final seen = <String>{};

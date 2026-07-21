@@ -59,4 +59,25 @@ void main() {
       expect(formatLeftBehindCount(4), '4 left behind');
     });
   });
+
+  group('override labels', () {
+    test('counts unique names and formats header chip', () {
+      final overrides = {
+        aisleMatchKey('Milk'): 'dairy',
+        aisleMatchKey('Hand cream'): 'personal',
+      };
+      expect(
+        countAisleOverridesForNames(
+          ['Milk', 'milk', 'Hand cream', 'Bread'],
+          overrides,
+        ),
+        2,
+      );
+      expect(formatAisleOverrideCountLabel(0), isNull);
+      expect(formatAisleOverrideCountLabel(1), '1 moved');
+      expect(formatAisleOverrideCountLabel(3), '3 moved');
+      expect(itemHasAisleOverride('Hand cream', overrides), isTrue);
+      expect(itemHasAisleOverride('Bread', overrides), isFalse);
+    });
+  });
 }

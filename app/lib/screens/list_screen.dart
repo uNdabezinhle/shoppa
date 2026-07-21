@@ -3278,6 +3278,40 @@ class _ListScreenState extends State<ListScreen> {
       _skipPastAisle();
     } else if (value == 'restore_skipped') {
       _restoreSkippedAisles();
+    } else if (value == 'reset_aisles') {
+      if (_aisleOverrides.isEmpty) return;
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Reset aisle moves?'),
+          content: Text(
+            'Clear ${_aisleOverrides.length} manual aisle placement'
+            '${_aisleOverrides.length == 1 ? '' : 's'}?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Reset all'),
+            ),
+          ],
+        ),
+      );
+      if (ok == true && mounted) {
+        await _aisleOverridesStore.clearAll();
+        if (!mounted) return;
+        setState(() => _aisleOverrides = const {});
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Aisle moves cleared'),
+            backgroundColor: ShoppaColors.panel2,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
     } else if (value == 'aisle_layout') {
       await _pickAisleLayout();
     } else if (value == 'item_order') {
@@ -3519,15 +3553,23 @@ class _ListScreenState extends State<ListScreen> {
     final collapsed = _collapsedAisleIds.contains(aisleId);
     final openInSection =
         section.items.where((i) => !i.checked).length;
+    final overrideCount = countAisleOverridesForNames(
+      section.items.map((i) => i.name),
+      _aisleOverrides,
+    );
+    final overrideLabel = formatAisleOverrideCountLabel(overrideCount);
+    final countBase =
+        collapsed ? '$openInSection left' : '${section.items.length}';
+    final countLabel = overrideLabel == null
+        ? countBase
+        : '$countBase · $overrideLabel';
     return [
       SliverPersistentHeader(
         key: _headerKeyForAisle(aisleId),
         pinned: true,
         delegate: _AisleStickyHeaderDelegate(
           label: section.aisle.label,
-          countLabel: collapsed
-              ? '$openInSection left'
-              : '${section.items.length}',
+          countLabel: countLabel,
           collapsed: collapsed,
           onToggle: () {
             setState(() {
@@ -3962,6 +4004,13 @@ class _ListScreenState extends State<ListScreen> {
                       const PopupMenuItem(
                         value: 'restore_skipped',
                         child: Text('Restore skipped aisles'),
+                      ),
+                    if (_shopMode && _aisleOverrides.isNotEmpty)
+                      PopupMenuItem(
+                        value: 'reset_aisles',
+                        child: Text(
+                          'Reset aisle moves (${_aisleOverrides.length})',
+                        ),
                       ),
                     PopupMenuItem(
                       value: 'item_order',

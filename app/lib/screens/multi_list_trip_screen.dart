@@ -71,6 +71,13 @@ class _MultiListTripScreenState extends State<MultiListTripScreen> {
   bool _keepScreenOn = true;
   bool _busy = false;
   bool _quickAddBusy = false;
+  /// User confirmed leave via end-trip recap (allows system back).
+  bool _leaveConfirmed = false;
+  /// Offline mutation queue size across trip lists.
+  int _pendingMutations = 0;
+  /// Last batch check-off failures (for Retry).
+  TripBatchOutcome? _lastBatchOutcome;
+  bool _lastBatchWantedChecked = true;
   String? _aisleLayoutId;
   /// Explicit “shopping at” for this trip (not from receipt alone).
   String? _tripStoreName;
@@ -95,6 +102,7 @@ class _MultiListTripScreenState extends State<MultiListTripScreen> {
     _loadTripStore();
     _loadLastPaidSnapshot();
     _loadRecentNames();
+    unawaited(_refreshPendingCount());
   }
 
   AisleGroup _aisleOf(ShoppaListItem item) =>
@@ -123,6 +131,213 @@ class _MultiListTripScreenState extends State<MultiListTripScreen> {
     final snap = await _aisleOverridesStore.snapshot();
     if (!mounted) return;
     setState(() => _aisleOverrides = snap);
+  }
+
+  Future<void> _refreshPendingCount() async {
+    var n = 0;
+    for (final id in widget.listIds) {
+      try {
+        n += await widget.listsRepository.pendingCount(id);
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    if (n != _pendingMutations) {
+      setState(() => _pendingMutations = n);
+    }
+  }
+
+  /// Apply check/uncheck per line; keep successes when some lists fail.
+  Future<TripBatchOutcome> _applyCheckedBatch(
+    List<TripLine> targets, {
+    required bool checked,
+    int? Function(TripLine line)? paidPriceFor,
+  }) async {
+    final succeeded = <String>[];
+    final failures = <TripBatchFailure>[];
+    var next = List<TripLine>.from(_lines);
+    for (final target in targets) {
+      try {
+        final updated = await widget.listsRepository.setItemChecked(
+          target.listId,
+          target.item.id,
+          checked: checked,
+          paidPrice: paidPriceFor?.call(target),
+          clientUpdatedAt: DateTime.now().toUtc(),
+        );
+        succeeded.add(target.key);
+        next = replaceTripLineItem(next, target.key, updated);
+      } catch (e) {
+        failures.add(
+          TripBatchFailure(
+            lineKey: target.key,
+            listId: target.listId,
+            listTitle: target.listTitle,
+            itemName: target.item.name,
+            message: '$e',
+          ),
+        );
+      }
+    }
+    final outcome = TripBatchOutcome(
+      succeededKeys: succeeded,
+      failures: failures,
+    );
+    if (mounted) {
+      setState(() {
+        _lines = next;
+        _lastBatchOutcome = outcome.hasFailures ? outcome : null;
+        _lastBatchWantedChecked = checked;
+      });
+    }
+    unawaited(_refreshPendingCount());
+    return outcome;
+  }
+
+  Future<void> _retryLastBatchFailures() async {
+    final last = _lastBatchOutcome;
+    if (last == null || last.failures.isEmpty || _busy) return;
+    final keys = last.failures.map((f) => f.lineKey).toSet();
+    final targets = _lines.where((l) {
+      if (!keys.contains(l.key)) return false;
+      return l.item.checked != _lastBatchWantedChecked;
+    }).toList();
+    if (targets.isEmpty) {
+      setState(() => _lastBatchOutcome = null);
+      return;
+    }
+    setState(() => _busy = true);
+    final outcome = await _applyCheckedBatch(
+      targets,
+      checked: _lastBatchWantedChecked,
+    );
+    if (!mounted) return;
+    setState(() => _busy = false);
+    await _presentBatchOutcome(
+      outcome,
+      successBase:
+          _lastBatchWantedChecked ? 'Retried check-off' : 'Retried undo',
+    );
+  }
+
+  Future<void> _presentBatchOutcome(
+    TripBatchOutcome outcome, {
+    String? successBase,
+    List<String>? undoKeys,
+    AisleGroup? nextAisle,
+  }) async {
+    if (!mounted || outcome.attempted == 0) return;
+
+    if (outcome.hasFailures) {
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(formatTripBatchOutcome(outcome)),
+          backgroundColor: ShoppaColors.rose,
+          duration: const Duration(seconds: 5),
+          action: SnackBarAction(
+            label: 'Retry',
+            textColor: ShoppaColors.amber,
+            onPressed: () => unawaited(_retryLastBatchFailures()),
+          ),
+        ),
+      );
+      final details = formatTripBatchFailureLines(outcome);
+      if (details.isEmpty) return;
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(formatTripBatchOutcome(outcome)),
+          content: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'These items did not sync. Others were updated.',
+                  style: TextStyle(color: ShoppaColors.mist, fontSize: 13),
+                ),
+                const SizedBox(height: 10),
+                for (final line in details)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: Text('· $line'),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('OK'),
+            ),
+            FilledButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                unawaited(_retryLastBatchFailures());
+              },
+              child: const Text('Retry failed'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    final base = successBase ?? formatTripBatchOutcome(outcome);
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          nextAisle == null
+              ? base
+              : '$base · ${formatNextAisleHint(nextAisle)}',
+        ),
+        backgroundColor: ShoppaColors.panel2,
+        action: undoKeys != null && undoKeys.isNotEmpty
+            ? SnackBarAction(
+                label: 'Undo',
+                textColor: ShoppaColors.amber,
+                onPressed: () => _forceUncheckKeys(undoKeys),
+              )
+            : null,
+      ),
+    );
+  }
+
+  Future<void> _resetAllAisleOverrides() async {
+    if (_aisleOverrides.isEmpty) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Reset aisle moves?'),
+        content: Text(
+          'Clear ${_aisleOverrides.length} manual aisle placement'
+          '${_aisleOverrides.length == 1 ? '' : 's'} and use name-based '
+          'guesses again?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Reset all'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    await _aisleOverridesStore.clearAll();
+    if (!mounted) return;
+    setState(() => _aisleOverrides = const {});
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Aisle moves cleared'),
+        backgroundColor: ShoppaColors.panel2,
+        duration: Duration(seconds: 2),
+      ),
+    );
   }
 
   /// Store name used for aisle auto-detect and receipt prefill.
@@ -944,6 +1159,7 @@ class _MultiListTripScreenState extends State<MultiListTripScreen> {
       if (checking && nextAisle != null) {
         _scrollToAisle(nextAisle.id);
       }
+      unawaited(_refreshPendingCount());
       if (checking && _lines.every((l) => l.item.checked)) {
         await _showTripComplete();
         return;
@@ -973,6 +1189,11 @@ class _MultiListTripScreenState extends State<MultiListTripScreen> {
         SnackBar(
           content: Text('Could not update: $e'),
           backgroundColor: ShoppaColors.rose,
+          action: SnackBarAction(
+            label: 'Retry',
+            textColor: ShoppaColors.amber,
+            onPressed: () => unawaited(_toggle(line)),
+          ),
         ),
       );
     }
@@ -1019,56 +1240,27 @@ class _MultiListTripScreenState extends State<MultiListTripScreen> {
 
     setState(() => _busy = true);
     final keys = matches.map((m) => m.key).toList();
-    try {
-      var next = List<TripLine>.from(_lines);
-      for (final match in matches) {
-        final isPrimary = match.key == line.key;
-        final updated = await widget.listsRepository.setItemChecked(
-          match.listId,
-          match.item.id,
-          checked: true,
-          paidPrice: isPrimary ? paidPrice : null,
-          clientUpdatedAt: DateTime.now().toUtc(),
-        );
-        next = next
-            .map((l) => l.key == match.key ? l.copyWithItem(updated) : l)
-            .toList();
-      }
-      if (!mounted) return;
+    final outcome = await _applyCheckedBatch(
+      matches,
+      checked: true,
+      paidPriceFor: (match) =>
+          match.key == line.key ? paidPrice : null,
+    );
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (outcome.succeededKeys.isNotEmpty) {
       HapticFeedback.mediumImpact();
-      setState(() {
-        _lines = next;
-        _busy = false;
-      });
-      if (_lines.every((l) => l.item.checked)) {
-        await _showTripComplete();
-        return;
-      }
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).hideCurrentSnackBar();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Checked off ${line.item.name} on ${matches.length} lists',
-          ),
-          backgroundColor: ShoppaColors.panel2,
-          action: SnackBarAction(
-            label: 'Undo',
-            textColor: ShoppaColors.amber,
-            onPressed: () => _forceUncheckKeys(keys),
-          ),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _busy = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Could not update: $e'),
-          backgroundColor: ShoppaColors.rose,
-        ),
-      );
     }
+    if (outcome.allSucceeded && _lines.every((l) => l.item.checked)) {
+      await _showTripComplete();
+      return;
+    }
+    await _presentBatchOutcome(
+      outcome,
+      successBase:
+          'Checked off ${line.item.name} on ${outcome.succeededKeys.length} lists',
+      undoKeys: outcome.succeededKeys,
+    );
   }
 
   /// Collapse current open aisle and expand the next — items stay unchecked.
@@ -1249,114 +1441,71 @@ class _MultiListTripScreenState extends State<MultiListTripScreen> {
     if (ok != true || !mounted) return;
 
     setState(() => _busy = true);
-    final keys = targets.map((t) => t.key).toList();
-    try {
-      var next = List<TripLine>.from(_lines);
-      for (final target in targets) {
-        final updated = await widget.listsRepository.setItemChecked(
-          target.listId,
-          target.item.id,
-          checked: true,
-          clientUpdatedAt: DateTime.now().toUtc(),
-        );
-        next = next
-            .map((l) => l.key == target.key ? l.copyWithItem(updated) : l)
-            .toList();
-      }
-      if (!mounted) return;
-      HapticFeedback.mediumImpact();
-      final nextAisle = nextOpenAisleGroup(
-        next.map((l) => l.item).toList(),
+    final outcome = await _applyCheckedBatch(targets, checked: true);
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (outcome.succeededKeys.isEmpty) {
+      await _presentBatchOutcome(outcome);
+      return;
+    }
+    HapticFeedback.mediumImpact();
+    final stillOpenInAisle = _lines.any(
+      (l) =>
+          !l.item.checked &&
+          _aisleOf(l.item).id == section.aisle.id,
+    );
+    AisleGroup? nextAisle;
+    if (!stillOpenInAisle) {
+      nextAisle = nextOpenAisleGroup(
+        _lines.map((l) => l.item).toList(),
         layout: _activeAisleLayout,
         afterAisleId: section.aisle.id,
         aisleOverrides: _aisleOverrides,
       );
       setState(() {
-        _lines = next;
         _collapsedAisleIds.add(section.aisle.id);
         _skippedAisleIds.remove(section.aisle.id);
         if (nextAisle != null) {
           _collapsedAisleIds.remove(nextAisle.id);
         }
-        _busy = false;
       });
       if (nextAisle != null) {
         _scrollToAisle(nextAisle.id);
       }
-      if (_lines.every((l) => l.item.checked)) {
-        await _showTripComplete();
-        return;
-      }
-      if (!mounted) return;
-      final base = targets.length == 1
-          ? 'Checked off 1 in ${section.aisle.label}'
-          : 'Checked off ${targets.length} in ${section.aisle.label}';
-      ScaffoldMessenger.of(context).hideCurrentSnackBar();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            nextAisle == null
-                ? base
-                : '$base · ${formatNextAisleHint(nextAisle)}',
-          ),
-          backgroundColor: ShoppaColors.panel2,
-          action: SnackBarAction(
-            label: 'Undo',
-            textColor: ShoppaColors.amber,
-            onPressed: () => _forceUncheckKeys(keys),
-          ),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _busy = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Could not update aisle: $e'),
-          backgroundColor: ShoppaColors.rose,
-        ),
-      );
     }
+    if (outcome.allSucceeded && _lines.every((l) => l.item.checked)) {
+      await _showTripComplete();
+      return;
+    }
+    final base = outcome.succeededKeys.length == 1
+        ? 'Checked off 1 in ${section.aisle.label}'
+        : 'Checked off ${outcome.succeededKeys.length} in ${section.aisle.label}';
+    await _presentBatchOutcome(
+      outcome,
+      successBase: base,
+      undoKeys: outcome.succeededKeys,
+      nextAisle: outcome.hasFailures ? null : nextAisle,
+    );
   }
 
   Future<void> _forceUncheckKeys(List<String> lineKeys) async {
     if (_busy || lineKeys.isEmpty) return;
-    setState(() => _busy = true);
-    try {
-      var next = List<TripLine>.from(_lines);
-      for (final key in lineKeys) {
-        TripLine? line;
-        for (final l in next) {
-          if (l.key == key) {
-            line = l;
-            break;
-          }
+    final targets = <TripLine>[];
+    for (final key in lineKeys) {
+      for (final l in _lines) {
+        if (l.key == key && l.item.checked) {
+          targets.add(l);
+          break;
         }
-        if (line == null || !line.item.checked) continue;
-        final updated = await widget.listsRepository.setItemChecked(
-          line.listId,
-          line.item.id,
-          checked: false,
-          clientUpdatedAt: DateTime.now().toUtc(),
-        );
-        next = next
-            .map((l) => l.key == key ? l.copyWithItem(updated) : l)
-            .toList();
       }
-      if (!mounted) return;
-      setState(() {
-        _lines = next;
-        _busy = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _busy = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Could not undo: $e'),
-          backgroundColor: ShoppaColors.rose,
-        ),
-      );
+    }
+    if (targets.isEmpty) return;
+    setState(() => _busy = true);
+    final outcome = await _applyCheckedBatch(targets, checked: false);
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (outcome.hasFailures) {
+      await _presentBatchOutcome(outcome, successBase: 'Undo');
     }
   }
 
@@ -1894,8 +2043,17 @@ class _MultiListTripScreenState extends State<MultiListTripScreen> {
       return;
     }
     if (action == 'leave') {
-      Navigator.pop(context);
+      _leaveConfirmed = true;
+      if (mounted) Navigator.pop(context);
     }
+  }
+
+  Future<void> _onSystemBack() async {
+    if (_leaveConfirmed || _remaining == 0) {
+      if (mounted) Navigator.pop(context);
+      return;
+    }
+    await _showEndTripRecap();
   }
 
   @override
@@ -1906,8 +2064,27 @@ class _MultiListTripScreenState extends State<MultiListTripScreen> {
             ? _listTitles.join(' · ')
             : '${_listTitles.first} +${_listTitles.length - 1}');
 
-    return Scaffold(
+    return PopScope(
+      canPop: _leaveConfirmed || _remaining == 0,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop) return;
+        if (_busy) return;
+        await _onSystemBack();
+      },
+      child: Scaffold(
       appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: _busy
+              ? null
+              : () async {
+                  if (_leaveConfirmed || _remaining == 0) {
+                    if (mounted) Navigator.pop(context);
+                    return;
+                  }
+                  await _showEndTripRecap();
+                },
+        ),
         title: Text(
           _remaining == 0 && _total > 0
               ? 'Trip complete'
@@ -1994,6 +2171,10 @@ class _MultiListTripScreenState extends State<MultiListTripScreen> {
                   _restoreSkippedAisles();
                 } else if (value == 'end_trip') {
                   await _showEndTripRecap();
+                } else if (value == 'reset_aisles') {
+                  await _resetAllAisleOverrides();
+                } else if (value == 'retry_failed') {
+                  await _retryLastBatchFailures();
                 }
               },
               itemBuilder: (ctx) => [
@@ -2079,6 +2260,19 @@ class _MultiListTripScreenState extends State<MultiListTripScreen> {
                     child: Text(
                       _remaining > 0 ? 'End trip / left behind' : 'Trip recap',
                     ),
+                  ),
+                if (_aisleOverrides.isNotEmpty)
+                  PopupMenuItem(
+                    value: 'reset_aisles',
+                    child: Text(
+                      'Reset aisle moves (${_aisleOverrides.length})',
+                    ),
+                  ),
+                if (_lastBatchOutcome != null &&
+                    _lastBatchOutcome!.hasFailures)
+                  const PopupMenuItem(
+                    value: 'retry_failed',
+                    child: Text('Retry failed updates'),
                   ),
                 PopupMenuItem(
                   value: 'focus_shop',
@@ -2248,6 +2442,36 @@ class _MultiListTripScreenState extends State<MultiListTripScreen> {
                             color: _remaining == 0
                                 ? ShoppaColors.green
                                 : ShoppaColors.amber,
+                          ),
+                        ),
+                      ],
+                      if (_pendingMutations > 0) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          _pendingMutations == 1
+                              ? '1 change waiting to sync (offline)'
+                              : '$_pendingMutations changes waiting to sync (offline)',
+                          style: const TextStyle(
+                            color: ShoppaColors.amber,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                      if (_lastBatchOutcome != null &&
+                          _lastBatchOutcome!.hasFailures) ...[
+                        const SizedBox(height: 6),
+                        GestureDetector(
+                          onTap: _busy
+                              ? null
+                              : () => unawaited(_retryLastBatchFailures()),
+                          child: Text(
+                            '${formatTripBatchOutcome(_lastBatchOutcome!)} · tap to retry',
+                            style: const TextStyle(
+                              color: ShoppaColors.rose,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
                         ),
                       ],
@@ -2764,6 +2988,7 @@ class _MultiListTripScreenState extends State<MultiListTripScreen> {
         },
       ),
       bottomNavigationBar: _buildQuickAddBar(),
+    ),
     );
   }
 
@@ -2778,6 +3003,17 @@ class _MultiListTripScreenState extends State<MultiListTripScreen> {
         !searchActive && _collapsedAisleIds.contains(aisleId);
     final openInSection =
         section.lines.where((l) => !l.item.checked).length;
+    final overrideCount = countAisleOverridesForNames(
+      section.lines.map((l) => l.item.name),
+      _aisleOverrides,
+    );
+    final overrideLabel = formatAisleOverrideCountLabel(overrideCount);
+    final countBase = collapsed
+        ? '$openInSection left'
+        : '${section.lines.length}';
+    final countLabel = overrideLabel == null
+        ? countBase
+        : '$countBase · $overrideLabel';
     return [
       // GlobalKey on the sliver enables Scrollable.ensureVisible after skip/done.
       SliverPersistentHeader(
@@ -2785,9 +3021,7 @@ class _MultiListTripScreenState extends State<MultiListTripScreen> {
         pinned: true,
         delegate: _TripAisleStickyHeaderDelegate(
           label: section.aisle.label,
-          countLabel: collapsed
-              ? '$openInSection left'
-              : '${section.lines.length}',
+          countLabel: countLabel,
           collapsed: collapsed,
           canCollapse: !searchActive,
           onToggle: searchActive
@@ -2828,6 +3062,10 @@ class _MultiListTripScreenState extends State<MultiListTripScreen> {
                   enabled: !_busy,
                   focusMode: _focusShop,
                   crossListHint: crossHint,
+                  aisleMoved: itemHasAisleOverride(
+                    line.item.name,
+                    _aisleOverrides,
+                  ),
                   onTap: _busy ? null : () => _toggle(line),
                   onSwipeToggle: _busy ? null : () => _toggle(line),
                   onQtyNudge: _busy || _focusShop
@@ -2844,6 +3082,8 @@ class _MultiListTripScreenState extends State<MultiListTripScreen> {
                 );
               },
               childCount: section.lines.length,
+              addAutomaticKeepAlives: false,
+              addRepaintBoundaries: true,
             ),
           ),
         ),
@@ -2992,6 +3232,7 @@ class _TripLineTile extends StatelessWidget {
     this.onMoveAisle,
     this.onCheckOffAll,
     this.crossListHint,
+    this.aisleMoved = false,
     this.enabled = true,
     this.focusMode = false,
   });
@@ -3007,6 +3248,8 @@ class _TripLineTile extends StatelessWidget {
   final VoidCallback? onCheckOffAll;
   /// e.g. “Also on Party” when the same open item is on another trip list.
   final String? crossListHint;
+  /// True when this name has a manual aisle override.
+  final bool aisleMoved;
   final bool enabled;
   final bool focusMode;
 
@@ -3023,6 +3266,7 @@ class _TripLineTile extends StatelessWidget {
       line.listTitle,
       if (item.unit.isNotEmpty && item.unit != 'ea') item.unit,
       if (item.paidPrice != null) formatCents(item.paidPrice!),
+      if (aisleMoved) 'aisle moved',
     ];
     final hasCrossList = crossListHint != null && crossListHint!.isNotEmpty;
     final checkSize = focusMode ? 40.0 : 32.0;

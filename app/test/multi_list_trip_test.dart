@@ -544,4 +544,63 @@ void main() {
       expect(next, {'meat'});
     });
   });
+
+  group('TripBatchOutcome', () {
+    test('formats partial failure and groups by list', () {
+      const outcome = TripBatchOutcome(
+        succeededKeys: ['a:1', 'b:2'],
+        failures: [
+          TripBatchFailure(
+            lineKey: 'a:3',
+            listId: 'a',
+            listTitle: 'Home',
+            itemName: 'Milk',
+            message: 'timeout',
+          ),
+          TripBatchFailure(
+            lineKey: 'c:4',
+            listId: 'c',
+            listTitle: 'Party',
+            itemName: 'Chips',
+            message: '403',
+          ),
+        ],
+      );
+      expect(formatTripBatchOutcome(outcome), 'Updated 2 · 2 failed');
+      expect(outcome.hasFailures, isTrue);
+      expect(formatTripBatchFailureLines(outcome), [
+        'Home: Milk',
+        'Party: Chips',
+      ]);
+    });
+
+    test('all failed / all succeeded headlines', () {
+      expect(
+        formatTripBatchOutcome(
+          const TripBatchOutcome(
+            succeededKeys: ['x'],
+            failures: [],
+          ),
+        ),
+        'Updated 1 item',
+      );
+      expect(
+        formatTripBatchOutcome(
+          const TripBatchOutcome(
+            succeededKeys: [],
+            failures: [
+              TripBatchFailure(
+                lineKey: 'a:1',
+                listId: 'a',
+                listTitle: 'Home',
+                itemName: 'Milk',
+                message: 'err',
+              ),
+            ],
+          ),
+        ),
+        'Could not update 1 item',
+      );
+    });
+  });
 }
