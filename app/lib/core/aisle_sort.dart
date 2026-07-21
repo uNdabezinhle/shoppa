@@ -273,11 +273,16 @@ bool isCatalogueStoreId(String? storeId) {
 /// Open (unchecked) list items that belong to [aisleId] (not the checked bucket).
 List<ShoppaListItem> openListItemsInAisle(
   List<ShoppaListItem> items,
-  String aisleId,
-) {
+  String aisleId, {
+  Map<String, String>? aisleOverrides,
+}) {
   if (aisleId.isEmpty || aisleId == 'checked') return const [];
   return items
-      .where((i) => !i.checked && aisleForItem(i).id == aisleId)
+      .where(
+        (i) =>
+            !i.checked &&
+            aisleForItem(i, aisleOverrides: aisleOverrides).id == aisleId,
+      )
       .toList(growable: false);
 }
 
@@ -300,6 +305,7 @@ AisleGroup? nextOpenAisleGroup(
   List<ShoppaListItem> items, {
   StoreAisleLayout? layout,
   String? afterAisleId,
+  Map<String, String>? aisleOverrides,
 }) {
   final resolved = layout ?? storeAisleLayoutById('default');
   final sections = shopAisleSections(
@@ -307,6 +313,7 @@ AisleGroup? nextOpenAisleGroup(
     separateChecked: true,
     includeChecked: false,
     layout: resolved,
+    aisleOverrides: aisleOverrides,
   );
   if (sections.isEmpty) return null;
 
@@ -362,6 +369,7 @@ AisleSkipResult skipPastOpenAisle({
   required Set<String> collapsedIds,
   StoreAisleLayout? layout,
   String? fromAisleId,
+  Map<String, String>? aisleOverrides,
 }) {
   final resolved = layout ?? storeAisleLayoutById('default');
   final sections = shopAisleSections(
@@ -369,6 +377,7 @@ AisleSkipResult skipPastOpenAisle({
     separateChecked: true,
     includeChecked: false,
     layout: resolved,
+    aisleOverrides: aisleOverrides,
   );
   if (sections.isEmpty) {
     return AisleSkipResult(collapsedIds: Set<String>.from(collapsedIds));
@@ -398,6 +407,7 @@ AisleSkipResult skipPastOpenAisle({
     items,
     layout: resolved,
     afterAisleId: skip.id,
+    aisleOverrides: aisleOverrides,
   );
   final nextCollapsed = Set<String>.from(collapsedIds)..add(skip.id);
   if (next != null) {
@@ -420,6 +430,13 @@ String formatAisleSkipMessage({
     return 'Skipped ${skipped.label} · last open aisle';
   }
   return 'Skipped ${skipped.label} · ${formatNextAisleHint(next)}';
+}
+
+/// Short recap line, e.g. `3 left behind` / `Nothing left behind`.
+String formatLeftBehindCount(int count) {
+  if (count <= 0) return 'Nothing left behind';
+  if (count == 1) return '1 left behind';
+  return '$count left behind';
 }
 
 /// Aisle groups in walk order for [layout], with any missing ids appended.
@@ -511,6 +528,15 @@ bool _nameMatchesKeyword(String lowerName, String keyword) {
   return lowerName.contains(k);
 }
 
+/// Normalized key for aisle overrides (trim + lower case).
+String aisleMatchKey(String name) => name.trim().toLowerCase();
+
+/// Lookup a built-in aisle group by id (null for unknown / checked bucket).
+AisleGroup? aisleGroupById(String? id) {
+  if (id == null || id.isEmpty || id == 'checked') return null;
+  return _aisleById[id];
+}
+
 AisleGroup aisleForName(String name) {
   final lower = name.toLowerCase();
   for (final entry in _keywordAisles.entries) {
@@ -523,7 +549,16 @@ AisleGroup aisleForName(String name) {
   return _aisleById['other']!;
 }
 
-AisleGroup aisleForItem(ShoppaListItem item) => aisleForName(item.name);
+/// Resolve aisle for an item, honouring optional device-local overrides.
+AisleGroup aisleForItem(
+  ShoppaListItem item, {
+  Map<String, String>? aisleOverrides,
+}) {
+  final overrideId = aisleOverrides?[aisleMatchKey(item.name)];
+  final overridden = aisleGroupById(overrideId);
+  if (overridden != null) return overridden;
+  return aisleForName(item.name);
+}
 
 /// A row in the shop list: either a section header or an item.
 sealed class ShopListRow {
@@ -554,6 +589,7 @@ List<AisleSection> shopAisleSections(
   bool separateChecked = true,
   bool includeChecked = true,
   StoreAisleLayout? layout,
+  Map<String, String>? aisleOverrides,
 }) {
   if (items.isEmpty) return const [];
 
@@ -569,7 +605,7 @@ List<AisleSection> shopAisleSections(
 
   final byAisle = <String, List<ShoppaListItem>>{};
   for (final item in open) {
-    final aisle = aisleForItem(item);
+    final aisle = aisleForItem(item, aisleOverrides: aisleOverrides);
     byAisle.putIfAbsent(aisle.id, () => []).add(item);
   }
 
@@ -598,6 +634,7 @@ List<ShopListRow> shopRowsByAisle(
   bool separateChecked = true,
   bool includeChecked = true,
   StoreAisleLayout? layout,
+  Map<String, String>? aisleOverrides,
 }) {
   final rows = <ShopListRow>[];
   for (final section in shopAisleSections(
@@ -605,6 +642,7 @@ List<ShopListRow> shopRowsByAisle(
     separateChecked: separateChecked,
     includeChecked: includeChecked,
     layout: layout,
+    aisleOverrides: aisleOverrides,
   )) {
     rows.add(ShopSectionRow(section.aisle));
     rows.addAll(section.items.map(ShopItemRow.new));

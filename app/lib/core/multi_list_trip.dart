@@ -221,13 +221,34 @@ class TripAisleSection {
 }
 
 /// Open (unchecked) trip lines that belong to [aisleId] (not the checked bucket).
-List<TripLine> openTripLinesInAisle(List<TripLine> lines, String aisleId) {
+List<TripLine> openTripLinesInAisle(
+  List<TripLine> lines,
+  String aisleId, {
+  Map<String, String>? aisleOverrides,
+}) {
   if (aisleId.isEmpty || aisleId == 'checked') return const [];
   return lines
       .where(
-        (l) => !l.item.checked && aisleForItem(l.item).id == aisleId,
+        (l) =>
+            !l.item.checked &&
+            aisleForItem(l.item, aisleOverrides: aisleOverrides).id == aisleId,
       )
       .toList(growable: false);
+}
+
+/// Remaining (unchecked) lines for end-of-trip “left behind” recap.
+List<TripLine> leftBehindTripLines(List<TripLine> lines) =>
+    lines.where((l) => !l.item.checked).toList(growable: false);
+
+/// Expand every aisle that still has open items (clear those collapse flags).
+Set<String> expandOpenAisleIds({
+  required Set<String> collapsedIds,
+  required Iterable<String> openAisleIds,
+}) {
+  if (collapsedIds.isEmpty) return collapsedIds;
+  final open = openAisleIds.toSet();
+  if (open.isEmpty) return Set<String>.from(collapsedIds);
+  return collapsedIds.where((id) => !open.contains(id)).toSet();
 }
 
 List<TripAisleSection> tripAisleSections(
@@ -235,6 +256,7 @@ List<TripAisleSection> tripAisleSections(
   bool separateChecked = true,
   bool includeChecked = true,
   StoreAisleLayout? layout,
+  Map<String, String>? aisleOverrides,
 }) {
   if (lines.isEmpty) return const [];
 
@@ -250,7 +272,7 @@ List<TripAisleSection> tripAisleSections(
 
   final byAisle = <String, List<TripLine>>{};
   for (final line in open) {
-    final aisle = aisleForItem(line.item);
+    final aisle = aisleForItem(line.item, aisleOverrides: aisleOverrides);
     byAisle.putIfAbsent(aisle.id, () => []).add(line);
   }
 

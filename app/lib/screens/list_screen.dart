@@ -10,6 +10,7 @@ import '../core/ads_repository.dart';
 import '../core/api_client.dart';
 import '../core/catalogue_repository.dart';
 import '../core/export_download.dart';
+import '../core/aisle_overrides_store.dart';
 import '../core/aisle_sort.dart';
 import '../core/list_chat_client.dart';
 import '../core/list_realtime_client.dart';
@@ -106,6 +107,12 @@ class _ListScreenState extends State<ListScreen> {
   bool _aisleOrder = true;
   /// Aisle group ids the shopper collapsed (tap sticky header to toggle).
   final Set<String> _collapsedAisleIds = {};
+  /// Aisles skipped without check-off (for restore / left-behind recap).
+  final Set<String> _skippedAisleIds = {};
+  final Map<String, GlobalKey> _aisleHeaderKeys = {};
+  final AisleOverridesStore _aisleOverridesStore =
+      SharedPreferencesAisleOverridesStore();
+  Map<String, String> _aisleOverrides = const {};
   /// Preferred store aisle layout id; null = auto from shopping-at / receipt.
   String? _aisleLayoutId;
   /// All / remaining / checked-off view filter.
@@ -156,6 +163,7 @@ class _ListScreenState extends State<ListScreen> {
     _restoreShoppingAtStore();
     _loadRecentNames();
     _loadShopPrefs();
+    _loadAisleOverrides();
     _loadLatestReceipt();
     _loadLastPaidSnapshot();
     // SRS FR-3.2: item/scale events patch the in-memory list; collaborator
@@ -332,7 +340,7 @@ class _ListScreenState extends State<ListScreen> {
     // Collapse the aisle once nothing open remains; expand the next walk aisle.
     AisleGroup? nextAisle;
     if (checking && _shopMode && _aisleOrder) {
-      final aisleId = aisleForItem(item).id;
+      final aisleId = _aisleOf(item).id;
       final projectedItems = <ShoppaListItem>[];
       for (final i in snapItems) {
         if (i.id == item.id) {
@@ -355,20 +363,25 @@ class _ListScreenState extends State<ListScreen> {
         }
       }
       final stillOpen = projectedItems.any(
-        (i) => !i.checked && aisleForItem(i).id == aisleId,
+        (i) => !i.checked && _aisleOf(i).id == aisleId,
       );
       if (!stillOpen) {
         nextAisle = nextOpenAisleGroup(
           projectedItems,
           layout: _activeAisleLayout,
           afterAisleId: aisleId,
+          aisleOverrides: _aisleOverrides,
         );
         setState(() {
           _collapsedAisleIds.add(aisleId);
+          _skippedAisleIds.remove(aisleId);
           if (nextAisle != null) {
             _collapsedAisleIds.remove(nextAisle.id);
           }
         });
+        if (nextAisle != null) {
+          _scrollToAisle(nextAisle.id);
+        }
       }
     }
 
@@ -541,6 +554,127 @@ class _ListScreenState extends State<ListScreen> {
       }
     });
     await _syncKeepAwake();
+  }
+
+  Future<void> _loadAisleOverrides() async {
+    final snap = await _aisleOverridesStore.snapshot();
+    if (!mounted) return;
+    setState(() => _aisleOverrides = snap);
+  }
+
+  AisleGroup _aisleOf(ShoppaListItem item) =>
+      aisleForItem(item, aisleOverrides: _aisleOverrides);
+
+  GlobalKey _headerKeyForAisle(String aisleId) =>
+      _aisleHeaderKeys.putIfAbsent(aisleId, GlobalKey.new);
+
+  void _scrollToAisle(String? aisleId) {
+    final id = aisleId?.trim() ?? '';
+    if (id.isEmpty) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final ctx = _aisleHeaderKeys[id]?.currentContext;
+      if (ctx == null) return;
+      Scrollable.ensureVisible(
+        ctx,
+        duration: const Duration(milliseconds: 320),
+        alignment: 0.06,
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
+
+  Future<void> _moveItemToAisle(ShoppaListItem item) async {
+    final current = _aisleOf(item);
+    final picked = await showDialog<String>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: Text('Aisle for “${item.name}”'),
+        children: [
+          for (final g in aislePickerGroups())
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, g.id),
+              child: ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(g.label),
+                trailing: g.id == current.id
+                    ? const Icon(Icons.check, color: ShoppaColors.green)
+                    : null,
+              ),
+            ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, ''),
+            child: const ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text('Reset to auto'),
+              subtitle: Text('Use name-based guess'),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (picked == null || !mounted) return;
+    if (picked.isEmpty) {
+      await _aisleOverridesStore.clearOverride(item.name);
+    } else {
+      await _aisleOverridesStore.setOverride(item.name, picked);
+    }
+    final snap = await _aisleOverridesStore.snapshot();
+    if (!mounted) return;
+    setState(() {
+      _aisleOverrides = snap;
+      _collapsedAisleIds.remove(_aisleOf(item).id);
+    });
+    _scrollToAisle(_aisleOf(item).id);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          picked.isEmpty
+              ? 'Aisle reset for ${item.name}'
+              : 'Moved ${item.name} to ${_aisleOf(item).label}',
+        ),
+        backgroundColor: ShoppaColors.panel2,
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  void _restoreSkippedAisles() {
+    final items = _listSnapshot?.items ?? const <ShoppaListItem>[];
+    final openIds = <String>{
+      for (final i in items)
+        if (!i.checked) _aisleOf(i).id,
+    };
+    final restore = _skippedAisleIds.where(openIds.contains).toSet();
+    if (restore.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No skipped aisles left behind'),
+          backgroundColor: ShoppaColors.panel2,
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+    setState(() => _collapsedAisleIds.removeAll(restore));
+    final first = nextOpenAisleGroup(
+      items,
+      layout: _activeAisleLayout,
+      aisleOverrides: _aisleOverrides,
+    );
+    _scrollToAisle(first?.id ?? restore.first);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          restore.length == 1
+              ? 'Restored 1 skipped aisle'
+              : 'Restored ${restore.length} skipped aisles',
+        ),
+        backgroundColor: ShoppaColors.panel2,
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
   StoreAisleLayout get _activeAisleLayout => resolveStoreAisleLayout(
@@ -1625,6 +1759,8 @@ class _ListScreenState extends State<ListScreen> {
       _linkItemToCatalogue(item);
     } else if (value == 'price') {
       _setPaidPrice(item);
+    } else if (value == 'aisle') {
+      unawaited(_moveItemToAisle(item));
     } else if (value == 'delete') {
       _deleteItemWithUndo(item);
     }
@@ -1750,6 +1886,11 @@ class _ListScreenState extends State<ListScreen> {
                             item.note.isEmpty ? 'Add note' : 'Edit note',
                           ),
                         ),
+                        if (_shopMode && !item.checked)
+                          const PopupMenuItem(
+                            value: 'aisle',
+                            child: Text('Move to aisle…'),
+                          ),
                         if (!_shopMode) ...[
                           const PopupMenuItem(
                             value: 'edit',
@@ -2959,6 +3100,33 @@ class _ListScreenState extends State<ListScreen> {
                   style: const TextStyle(color: ShoppaColors.amber, fontSize: 12),
                 ),
               ],
+              if (!summary.isComplete) ...[
+                const SizedBox(height: 12),
+                Text(
+                  formatLeftBehindCount(
+                    summary.totalItems - summary.checkedItems,
+                  ),
+                  style: const TextStyle(
+                    color: ShoppaColors.mist,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                for (final item in (list.items ?? const <ShoppaListItem>[])
+                    .where((i) => !i.checked)
+                    .take(8))
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: Text(
+                      '· ${item.name} (${_aisleOf(item).label})',
+                      style: const TextStyle(
+                        color: ShoppaColors.ink,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+              ],
               if (!summary.hasSavings) ...[
                 const SizedBox(height: 8),
                 const Text(
@@ -2985,6 +3153,16 @@ class _ListScreenState extends State<ListScreen> {
               onPressed: () => Navigator.of(context).pop('fill_prices'),
               child: const Text('Add missing prices'),
             ),
+          if (!summary.isComplete)
+            TextButton(
+              onPressed: () => Navigator.of(context).pop('show_left'),
+              child: const Text('Show left behind'),
+            ),
+          if (!summary.isComplete && _skippedAisleIds.isNotEmpty)
+            TextButton(
+              onPressed: () => Navigator.of(context).pop('restore_skipped'),
+              child: const Text('Restore skipped'),
+            ),
           if (summary.checkedItems > 0 && list.canEdit)
             TextButton(
               onPressed: () => Navigator.of(context).pop('new_trip'),
@@ -3007,6 +3185,24 @@ class _ListScreenState extends State<ListScreen> {
       await _logReceipt(list);
     } else if (action == 'fill_prices' && mounted) {
       await _fillMissingPrices(list);
+    } else if (action == 'show_left' && mounted) {
+      final openIds = <String>{
+        for (final i in list.items ?? const <ShoppaListItem>[])
+          if (!i.checked) _aisleOf(i).id,
+      };
+      setState(() {
+        _collapsedAisleIds.removeAll(openIds);
+        _itemFilter = ItemViewFilter.remaining;
+        _shopMode = true;
+      });
+      final first = nextOpenAisleGroup(
+        list.items ?? const [],
+        layout: _activeAisleLayout,
+        aisleOverrides: _aisleOverrides,
+      );
+      _scrollToAisle(first?.id);
+    } else if (action == 'restore_skipped' && mounted) {
+      _restoreSkippedAisles();
     } else if (action == 'new_trip' && mounted) {
       await _startNewTrip(list);
       if (mounted) {
@@ -3071,6 +3267,7 @@ class _ListScreenState extends State<ListScreen> {
           includeChecked: true,
           separateChecked: true,
           layout: _activeAisleLayout,
+          aisleOverrides: _aisleOverrides,
         )) {
           _collapsedAisleIds.add(s.aisle.id);
         }
@@ -3079,6 +3276,8 @@ class _ListScreenState extends State<ListScreen> {
       setState(() => _collapsedAisleIds.clear());
     } else if (value == 'skip_aisle') {
       _skipPastAisle();
+    } else if (value == 'restore_skipped') {
+      _restoreSkippedAisles();
     } else if (value == 'aisle_layout') {
       await _pickAisleLayout();
     } else if (value == 'item_order') {
@@ -3132,6 +3331,7 @@ class _ListScreenState extends State<ListScreen> {
       collapsedIds: _collapsedAisleIds,
       layout: _activeAisleLayout,
       fromAisleId: fromAisleId,
+      aisleOverrides: _aisleOverrides,
     );
     if (result.skippedAisle == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -3147,8 +3347,10 @@ class _ListScreenState extends State<ListScreen> {
       _collapsedAisleIds
         ..clear()
         ..addAll(result.collapsedIds);
+      _skippedAisleIds.add(result.skippedAisle!.id);
     });
     HapticFeedback.selectionClick();
+    _scrollToAisle(result.nextAisle?.id);
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -3174,6 +3376,7 @@ class _ListScreenState extends State<ListScreen> {
     final allOpen = openListItemsInAisle(
       list.items ?? const [],
       section.aisle.id,
+      aisleOverrides: _aisleOverrides,
     );
     final targets = fromSection.isNotEmpty ? fromSection : allOpen;
     if (targets.isEmpty) return;
@@ -3246,13 +3449,18 @@ class _ListScreenState extends State<ListScreen> {
       projectedItems,
       layout: _activeAisleLayout,
       afterAisleId: section.aisle.id,
+      aisleOverrides: _aisleOverrides,
     );
     setState(() {
       _collapsedAisleIds.add(section.aisle.id);
+      _skippedAisleIds.remove(section.aisle.id);
       if (nextAisle != null) {
         _collapsedAisleIds.remove(nextAisle.id);
       }
     });
+    if (nextAisle != null) {
+      _scrollToAisle(nextAisle.id);
+    }
     _reload();
     if (!mounted) return;
 
@@ -3313,6 +3521,7 @@ class _ListScreenState extends State<ListScreen> {
         section.items.where((i) => !i.checked).length;
     return [
       SliverPersistentHeader(
+        key: _headerKeyForAisle(aisleId),
         pinned: true,
         delegate: _AisleStickyHeaderDelegate(
           label: section.aisle.label,
@@ -3747,6 +3956,13 @@ class _ListScreenState extends State<ListScreen> {
                         value: 'skip_aisle',
                         child: Text('Skip to next aisle'),
                       ),
+                    if (_shopMode &&
+                        _aisleOrder &&
+                        _skippedAisleIds.isNotEmpty)
+                      const PopupMenuItem(
+                        value: 'restore_skipped',
+                        child: Text('Restore skipped aisles'),
+                      ),
                     PopupMenuItem(
                       value: 'item_order',
                       child: Text(
@@ -3923,6 +4139,7 @@ class _ListScreenState extends State<ListScreen> {
                   includeChecked: _itemFilter == ItemViewFilter.all,
                   separateChecked: _itemFilter == ItemViewFilter.all,
                   layout: _activeAisleLayout,
+                  aisleOverrides: _aisleOverrides,
                 )
               : null;
           final checkedCount =

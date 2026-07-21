@@ -523,4 +523,25 @@ void main() {
       expect(withTill, contains('over basket'));
     });
   });
+
+  group('leftBehindTripLines / expandOpenAisleIds', () {
+    test('left behind are unchecked lines only', () {
+      final lines = buildTripLines([
+        _list('a', 'Home', [
+          _item('1', name: 'Milk'),
+          _item('2', name: 'Bread', checked: true),
+        ]),
+      ]);
+      final left = leftBehindTripLines(lines);
+      expect(left.map((l) => l.item.name).toList(), ['Milk']);
+    });
+
+    test('expandOpenAisleIds drops collapsed flags for open aisles', () {
+      final next = expandOpenAisleIds(
+        collapsedIds: {'produce', 'dairy', 'meat'},
+        openAisleIds: {'dairy', 'produce'},
+      );
+      expect(next, {'meat'});
+    });
+  });
 }
