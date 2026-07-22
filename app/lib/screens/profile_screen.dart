@@ -217,6 +217,32 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ListTile(
             tileColor: ShoppaColors.panel,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            leading: const Icon(Icons.qr_code_scanner, color: ShoppaColors.amber),
+            title: const Text('Verify product', style: TextStyle(color: ShoppaColors.ink)),
+            subtitle: const Text(
+              'Scan barcodes · allergen profile',
+              style: TextStyle(color: ShoppaColors.mist, fontSize: 12),
+            ),
+            trailing: const Icon(Icons.chevron_right, color: ShoppaColors.mist),
+            onTap: () => context.push('/verify'),
+          ),
+          const SizedBox(height: 12),
+          ListTile(
+            tileColor: ShoppaColors.panel,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            leading: const Icon(Icons.health_and_safety_outlined, color: ShoppaColors.amber),
+            title: const Text('Allergen profile', style: TextStyle(color: ShoppaColors.ink)),
+            subtitle: const Text(
+              'Personalised food safety warnings',
+              style: TextStyle(color: ShoppaColors.mist, fontSize: 12),
+            ),
+            trailing: const Icon(Icons.chevron_right, color: ShoppaColors.mist),
+            onTap: () => context.push('/verify/allergens'),
+          ),
+          const SizedBox(height: 12),
+          ListTile(
+            tileColor: ShoppaColors.panel,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             leading: const Icon(Icons.privacy_tip_outlined, color: ShoppaColors.amber),
             title: const Text('Privacy & Data', style: TextStyle(color: ShoppaColors.ink)),
             subtitle: const Text(

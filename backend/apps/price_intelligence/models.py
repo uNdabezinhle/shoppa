@@ -31,6 +31,10 @@ class Product(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=200)
     region = models.CharField(max_length=8, default="ZA")
+    # Optional GTIN for merge with product_verify / Open Food Facts.
+    gtin = models.CharField(
+        max_length=14, blank=True, null=True, unique=True, db_index=True
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

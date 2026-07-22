@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     "apps.admin_tools",
     "apps.ads",
     "apps.devices",
+    "apps.product_verify",
     "django_celery_beat",
 ]
 
@@ -221,6 +222,19 @@ TYPESENSE_API_KEY = os.environ.get("TYPESENSE_API_KEY", "shoppa-dev-key")
 # Scraper (M8): seed is default/CI; live requires SCRAPER_LIVE_ENABLED=true.
 SCRAPER_MODE = os.environ.get("SCRAPER_MODE", "seed")
 SCRAPER_LIVE_ENABLED = os.environ.get("SCRAPER_LIVE_ENABLED", "False") == "True"
+
+# Product verify / Open Food Facts (barcode food verification).
+# OFF_CLIENT_MODE: live | fixture (fixture for tests/CI without network).
+OPEN_FOOD_FACTS_BASE_URL = os.environ.get(
+    "OPEN_FOOD_FACTS_BASE_URL", "https://world.openfoodfacts.org"
+)
+OFF_USER_AGENT = os.environ.get(
+    "OFF_USER_AGENT", "Shoppa/1.1 (product-verify; https://shoppa.app)"
+)
+OFF_HTTP_TIMEOUT_SECONDS = float(os.environ.get("OFF_HTTP_TIMEOUT_SECONDS", "1.5"))
+OFF_CACHE_TTL_DAYS = int(os.environ.get("OFF_CACHE_TTL_DAYS", "7"))
+OFF_NOT_FOUND_TTL_HOURS = int(os.environ.get("OFF_NOT_FOUND_TTL_HOURS", "24"))
+OFF_CLIENT_MODE = os.environ.get("OFF_CLIENT_MODE", "live")
 
 # Launch / ops (M7+)
 SHOPPA_RELEASE_VERSION = os.environ.get("SHOPPA_RELEASE_VERSION", "1.1.0")

@@ -355,6 +355,28 @@ class _MallTabScreenState extends State<MallTabScreen> {
                       onTap: () => context.push('/promotions'),
                     ),
                   ],
+                  const SizedBox(height: 12),
+                  ListTile(
+                    tileColor: ShoppaColors.panel,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      side: BorderSide(color: ShoppaColors.amber.withOpacity(0.35)),
+                    ),
+                    leading: const Icon(Icons.qr_code_scanner, color: ShoppaColors.amber),
+                    title: const Text(
+                      'Verify a product',
+                      style: TextStyle(
+                        color: ShoppaColors.ink,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    subtitle: const Text(
+                      'Scan barcode · allergen safety check',
+                      style: TextStyle(color: ShoppaColors.mist, fontSize: 12),
+                    ),
+                    trailing: const Icon(Icons.chevron_right, color: ShoppaColors.mist),
+                    onTap: () => context.push('/verify'),
+                  ),
                   if (widget.user.accountType == 'personal') ...[
                     const SizedBox(height: 16),
                     ListTile(

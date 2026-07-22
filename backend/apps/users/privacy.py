@@ -12,6 +12,39 @@ from .serializers import UserSerializer
 def build_user_data_export(user: User) -> dict:
     subscription = get_active_subscription(user)
     owned_lists = ShoppingList.objects.filter(owner=user).order_by("title")
+
+    allergen_profile = None
+    try:
+        from apps.product_verify.models import ScanEvent, UserAllergenProfile
+
+        try:
+            profile = user.allergen_profile
+            allergen_profile = {
+                "allergens": profile.allergens or [],
+                "consent_at": (
+                    profile.consent_at.isoformat().replace("+00:00", "Z")
+                    if profile.consent_at
+                    else None
+                ),
+                "updated_at": profile.updated_at.isoformat().replace(
+                    "+00:00", "Z"
+                ),
+            }
+        except UserAllergenProfile.DoesNotExist:
+            allergen_profile = None
+
+        scan_history = [
+            {
+                "gtin": e.gtin,
+                "level": e.level,
+                "product_name": e.product_name,
+                "scanned_at": e.scanned_at.isoformat().replace("+00:00", "Z"),
+            }
+            for e in ScanEvent.objects.filter(user=user)[:100]
+        ]
+    except Exception:
+        scan_history = []
+
     return {
         "user": UserSerializer(user).data,
         "subscription": {
@@ -28,6 +61,8 @@ def build_user_data_export(user: User) -> dict:
             }
             for lst in owned_lists
         ],
+        "allergen_profile": allergen_profile,
+        "scan_history": scan_history,
         "export_format": "shoppa-user-export-v1",
     }
 

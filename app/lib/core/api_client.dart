@@ -182,6 +182,22 @@ class ApiClient {
     );
   }
 
+  Future<dynamic> put(
+    String path,
+    Map<String, dynamic> body, {
+    bool authenticated = true,
+  }) async {
+    return _request(
+      path,
+      () async => _client.put(
+        _uri(path),
+        headers: await _headers(authenticated: authenticated),
+        body: jsonEncode(body),
+      ),
+      authenticated: authenticated,
+    );
+  }
+
   Future<dynamic> patch(
     String path,
     Map<String, dynamic> body, {

@@ -18,6 +18,9 @@ import '../screens/profile_screen.dart';
 import '../screens/promotions_screen.dart';
 import '../screens/subscription_screen.dart';
 import '../screens/register_screen.dart';
+import '../screens/allergen_profile_screen.dart';
+import '../screens/scan_history_screen.dart';
+import '../screens/verify_scan_screen.dart';
 import 'multi_list_trip.dart';
 
 GoRouter createAppRouter(AppDeps deps) {
@@ -115,6 +118,24 @@ GoRouter createAppRouter(AppDeps deps) {
         path: '/discover-lists',
         builder: (context, state) => DiscoverListsScreen(
           listsRepository: deps.listsRepository,
+        ),
+      ),
+      GoRoute(
+        path: '/verify',
+        builder: (context, state) => VerifyScanScreen(
+          verifyRepository: deps.verifyRepository,
+        ),
+      ),
+      GoRoute(
+        path: '/verify/allergens',
+        builder: (context, state) => AllergenProfileScreen(
+          verifyRepository: deps.verifyRepository,
+        ),
+      ),
+      GoRoute(
+        path: '/verify/history',
+        builder: (context, state) => ScanHistoryScreen(
+          verifyRepository: deps.verifyRepository,
         ),
       ),
       GoRoute(

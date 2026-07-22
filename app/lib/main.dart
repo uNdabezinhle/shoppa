@@ -18,6 +18,7 @@ import 'core/notifications_repository.dart';
 import 'core/subscriptions_repository.dart';
 import 'core/offline_store.dart';
 import 'core/token_store.dart';
+import 'core/verify_repository.dart';
 import 'theme/shoppa_theme.dart';
 
 /// API base URL is overridable at build time, e.g.:
@@ -59,6 +60,7 @@ void main() {
   );
   final notificationsRepository = NotificationsRepository(apiClient);
   final subscriptionsRepository = SubscriptionsRepository(apiClient);
+  final verifyRepository = VerifyRepository(apiClient);
   final wsBaseUrl = _deriveWsBaseUrl(_apiBaseUrl);
   final deliveryRealtimeClient = DeliveryRealtimeClient(
     wsBaseUrl: wsBaseUrl,
@@ -83,6 +85,7 @@ void main() {
     listsRepository: listsRepository,
     notificationsRepository: notificationsRepository,
     subscriptionsRepository: subscriptionsRepository,
+    verifyRepository: verifyRepository,
     realtimeClient: realtimeClient,
     chatClient: chatClient,
     authState: authState,

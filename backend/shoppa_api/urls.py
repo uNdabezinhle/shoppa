@@ -25,4 +25,5 @@ urlpatterns = [
     path("v1/", include("apps.admin_tools.urls")),
     path("v1/", include("apps.ads.urls")),
     path("v1/", include("apps.devices.urls")),
+    path("v1/", include("apps.product_verify.urls")),
 ]
